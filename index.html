@@ -683,6 +683,8 @@ body{background:#0f1923;color:#d4dde6;font-family:'Segoe UI',Arial,sans-serif;fo
 #header h1{font-size:15px;font-weight:700;color:#e8f0f8;margin-bottom:2px}
 #header .sub{color:#7a9ab8;font-size:11px}
 #gpx-area{flex-shrink:0;display:flex;flex-direction:column;align-items:flex-end;gap:4px}
+#share-btn{background:#162a3d;border:1px solid #3a6080;border-radius:5px;color:#7ab0d0;font-size:10px;padding:5px 9px;cursor:pointer;white-space:nowrap;margin-left:6px;font-family:inherit}
+#share-btn:hover{background:#1e3a50;color:#a0d0f0}
 #gpx-btn{background:#162a3d;border:1px dashed #3a6080;border-radius:5px;color:#7ab0d0;font-size:10px;padding:5px 9px;cursor:pointer;white-space:nowrap;transition:background .15s}
 #gpx-btn:hover{background:#1e3a50;color:#a0d0f0}
 #gpx-status{font-size:9px;color:#4a9fd0;white-space:nowrap}
@@ -772,6 +774,7 @@ body{background:#0f1923;color:#d4dde6;font-family:'Segoe UI',Arial,sans-serif;fo
   </div>
   <div id="gpx-area">
     <button id="gpx-btn" onclick="document.getElementById('gpx-input').click()">&#128196; Load GPX</button>
+<button id="share-btn" onclick="copyPlanLink()" title="Copy a link that reproduces this exact plan">&#128279; Copy link</button>
     <input type="file" id="gpx-input" accept=".gpx" style="display:none" onchange="handleGPXFile(this.files[0])"/>
     <div id="gpx-status">drop .gpx here to update route</div>
   </div>
@@ -1026,6 +1029,69 @@ function kmBetween(a, b) {
   return Math.sqrt(dlat*dlat + dlon*dlon);
 }
 
+// -- Route index ------------------------------------------------------------
+// Everything derived from TRACK - cumulative distance along it, and where each
+// shelter projects onto it - is computed once and cached behind a single
+// invalidation point.
+//
+// buildShelterLegs() and the GPS handler each used to re-scan the whole track
+// once per shelter, so one position fix cost O(track x shelters): 164k distance
+// calculations on this 134 km section, and ~5.8M across the full HRP.
+//
+// Those inline scans also compared raw (dlat^2 + dlon^2). A degree of longitude
+// is only ~0.73 of a degree of latitude at 42.8N, so that metric stretched the
+// east-west axis and could pick the wrong nearest point for shelters set back
+// from the track. Everything now goes through kmBetween.
+let _routeIdx = null;
+let _lastFixIdx = -1;
+
+function invalidateRouteIndex(){ _routeIdx = null; _lastFixIdx = -1; }
+
+function nearestTrackPoint(ll){
+  let bi = 0, bd = Infinity;
+  for (let i = 0; i < TRACK.length; i++){
+    const d = kmBetween(ll, TRACK[i]);
+    if (d < bd){ bd = d; bi = i; }
+  }
+  return { idx: bi, km: bd };
+}
+
+function routeIndex(){
+  if (_routeIdx) return _routeIdx;
+  const n = TRACK.length;
+  const cum = new Float64Array(n);
+  for (let i = 1; i < n; i++) cum[i] = cum[i-1] + kmBetween(TRACK[i-1], TRACK[i]);
+  const proj = new Map();           // shelter name -> where it meets the route
+  for (const sh of shelterIndex){
+    const p = nearestTrackPoint(sh.ll);
+    proj.set(sh.name, { idx: p.idx, km: cum[p.idx], off: p.km });
+  }
+  _routeIdx = { cum: cum, proj: proj, total: n ? cum[n-1] : 0 };
+  return _routeIdx;
+}
+
+// Position fixes arrive every second or so and move only metres, so search a
+// window around the previous match. If the best point lands on the window edge
+// we have jumped (first fix, or a lift down the valley) and fall back to a
+// full scan.
+function nearestTrackIdxFast(ll){
+  const n = TRACK.length;
+  if (_lastFixIdx >= 0 && n){
+    const W = 200;
+    const lo = Math.max(0, _lastFixIdx - W), hi = Math.min(n - 1, _lastFixIdx + W);
+    let bi = lo, bd = Infinity;
+    for (let i = lo; i <= hi; i++){
+      const d = kmBetween(ll, TRACK[i]);
+      if (d < bd){ bd = d; bi = i; }
+    }
+    if (bi > lo + 1 && bi < hi - 1){ _lastFixIdx = bi; return { idx: bi, km: bd }; }
+  }
+  const p = nearestTrackPoint(ll);
+  _lastFixIdx = p.idx;
+  return p;
+}
+
+
 // Route on real OSM hiking paths via BRouter. Returns [[lat,lon,ele],...] or null.
 // BRouter's hiking-beta profile routes on actual mapped trails; OSRM's public "foot"
 // profile is car-network-derived and produces garbage loops in mountain terrain.
@@ -1106,9 +1172,6 @@ function mkShelterIcon(type){
   const s=SHELTER_STYLE[type];
   return L.divIcon({className:'',html:'<div style="background:'+s.bg+';color:'+s.fg+';border:2px solid '+s.border+';border-radius:3px;width:20px;height:20px;display:flex;align-items:center;justify-content:center;font-size:9px;font-weight:700;box-shadow:0 1px 5px #0008">'+type+'</div>',iconSize:[20,20],iconAnchor:[10,10]});
 }
-function mkHut(){ return mkShelterIcon('R'); }
-function mkCabane(){ return mkShelterIcon('C'); }
-function mkAbri(){ return mkShelterIcon('A'); }
 
 // Shelter map badges are rendered from shelterIndex further down - see the
 // SHELTER_INFO block. The old staffedHuts / cabanes / abris arrays lived here and
@@ -1214,8 +1277,7 @@ function legZoomGate(){
 }
 
 function buildShelterLegs(){
-  const cum = new Array(TRACK.length); cum[0] = 0;
-  for (let i = 1; i < TRACK.length; i++) cum[i] = cum[i-1] + kmBetween(TRACK[i-1], TRACK[i]);
+  const cum = routeIndex().cum;
 
   // When a day card is selected, only the legs actually walked that day. Each
   // TRACK point carries its day in p[3], so the day is a km window along the
@@ -1234,14 +1296,10 @@ function buildShelterLegs(){
 
   // Only count shelter classes that are currently shown: "the next place I could
   // sleep" depends on which kinds you would actually accept.
+  const proj = routeIndex().proj;
   const pts = shelterIndex.filter(s => typeVisible[s.type]).map(s => {
-    let bi = 0, bd = Infinity;
-    for (let i = 0; i < TRACK.length; i++) {
-      const d = (TRACK[i][0]-s.ll[0])**2 + (TRACK[i][1]-s.ll[1])**2;
-      if (d < bd) { bd = d; bi = i; }
-    }
-    return { name:s.name, type:s.type, ele:s.ele, idx:bi, km:cum[bi],
-             off: kmBetween([TRACK[bi][0], TRACK[bi][1]], s.ll) };
+    const p = proj.get(s.name);
+    return { name:s.name, type:s.type, ele:s.ele, idx:p.idx, km:p.km, off:p.off };
   }).sort((a,b) => a.km - b.km);
 
   const legs = [];
@@ -1318,7 +1376,7 @@ function setLegs(on){
       + (ad ? ' <span style="font-weight:400">(D' + ad + ')</span>' : '');
   }
 }
-document.getElementById('leg-toggle').addEventListener('click', () => setLegs(!legsOn));
+document.getElementById('leg-toggle').addEventListener('click', () => { setLegs(!legsOn); syncPlanHash(); });
 map.on('zoomend', () => { if (legsOn) setLegs(true); });
 
 // Shelter index for sidebar filtering (all shelters, sorted west→east per day)
@@ -1456,7 +1514,7 @@ function applyTypeFilter(t){
   const row = document.getElementById('lg-row-' + t);
   if (!row) return;
   row.title = SHELTER_STYLE[t].label + ' — ' + shelterMarkers[t].length + ' on this route. Tap to show/hide.';
-  row.addEventListener('click', () => { typeVisible[t] = !typeVisible[t]; applyTypeFilter(t); });
+  row.addEventListener('click', () => { typeVisible[t] = !typeVisible[t]; applyTypeFilter(t); syncPlanHash(); });
 });
 
 (function(){
@@ -1646,13 +1704,14 @@ function computeDaySplits(){
   // Restore original track so this fn is idempotent across multiple calls
   TRACK.length = 0;
   TRACK_ORIG.forEach(p => TRACK.push([...p]));
+  invalidateRouteIndex();
 
-  function nearestIdx(lat,lon){let b=0,bd=Infinity;TRACK.forEach((p,i)=>{const d=(p[0]-lat)**2+(p[1]-lon)**2;if(d<bd){bd=d;b=i;}});return b;}
   const splits=[0];
-  for(let d=1;d<=5;d++) splits.push(selectedNights[d]?nearestIdx(selectedNights[d].ll[0],selectedNights[d].ll[1]):splits[splits.length-1]+1);
+  for(let d=1;d<=5;d++) splits.push(selectedNights[d]?nearestTrackPoint(selectedNights[d].ll).idx:splits[splits.length-1]+1);
 
   // Truncate at Night 5 split — the east-going HRP section is not Day 6 to Luchon
   TRACK.length = splits[5] + 1;
+  invalidateRouteIndex();
   splits.push(TRACK.length);
 
   for(let d=1;d<=5;d++){const from=d===1?splits[0]:splits[d-1]+1;const to=splits[d]+1;for(let i=from;i<to;i++)TRACK[i][3]=d;}
@@ -1690,6 +1749,7 @@ function applyDay6(path, gen, provisional) {
   if (routeGen !== gen) return;
   for (let i = TRACK.length - 1; i >= 0; i--) if (TRACK[i][3] === 6) TRACK.splice(i, 1);
   path.forEach(p => TRACK.push([p[0], p[1], p[2], 6]));
+  invalidateRouteIndex();
   const d6 = TRACK.filter(p => p[3] === 6);
   dayLines[6].setLatLngs(d6.map(p => [p[0], p[1]]));
   dayLines[6].setStyle({ dashArray: provisional ? '7,6' : null });
@@ -1760,13 +1820,6 @@ function getDayShelters(day){
   return shelters.sort((a,b)=>a.ll[1]-b.ll[1]);
 }
 
-function nightsAreDefault(){
-  for(let d=1;d<=5;d++){
-    const a=selectedNights[d],b=DEFAULT_NIGHTS[d];
-    if((a?a.name:null)!==(b?b.name:null)) return false;
-  }
-  return true;
-}
 
 function changedNightCount(){
   let n=0;
@@ -1788,6 +1841,7 @@ function restoreDefaultNights(){
   const ad=(typeof activeDay!=='undefined')?activeDay:null;
   drawElevMain(ad);
   updateSidebar(ad);
+  syncPlanHash();
 }
 
 // Reset just one night
@@ -1799,6 +1853,7 @@ function restoreDefaultNight(day){
   if(nightMarkers[day]) nightMarkers[day].setLatLng(selectedNights[day].ll);
   drawElevMain((typeof activeDay!=='undefined')?activeDay:null);
   updateSidebar(day);
+  syncPlanHash();
 }
 
 function selectNight(day,idx){
@@ -1807,16 +1862,17 @@ function selectNight(day,idx){
   if(!s)return;
   selectedNights[day]=s;
   computeDaySplits();
+  updateDayCards();          // both restore paths did this; picking a hut did not
   if(nightMarkers[day])nightMarkers[day].setLatLng(s.ll);
   if(typeof activeDay!=='undefined')drawElevMain(activeDay);
   updateSidebar(day);
+  syncPlanHash();
 }
 
 // Sidebar shelter filter
 const origStopsHTML = document.getElementById('stops-box').innerHTML;
 // _typeColors is defined up with SHELTER_STYLE (single source of truth)
 const _dayTitles = {1:'Sat 12 Sep · D1',2:'Sun 13 Sep · D2',3:'Mon 14 Sep · D3',4:'Tue 15 Sep · D4',5:'Wed 16 Sep · D5',6:'Thu 17 Sep · D6'};
-const _bivouacs = {1:'Cabane de Lourdes (1,947m · 6pl unattended)',2:"Cabane d'Estaubé (1,765m · 8pl unattended · mattresses)",3:'Refugio de Barrosa (1,745m · 12pl unattended · wood stove)',4:'Refugio de Viados (1,760m · staffed · meals + showers)',5:'Refuge du Portillon (2,571m · 30pl year-round unattended)',6:'Finish: Bagnères-de-Luchon (620 m)'};
 function updateSidebar(day){
   const box=document.getElementById('stops-box');
   if(!day){box.innerHTML=origStopsHTML;return;}
@@ -1878,6 +1934,7 @@ var activeDay=null;
       drawElevMain(null);
       updateSidebar(null);
       setLegs(legsOn);
+      syncPlanHash();
     } else {
       activeDay=d;
       document.querySelectorAll('.day-card').forEach(c=>c.classList.remove('active'));
@@ -1887,9 +1944,129 @@ var activeDay=null;
       drawElevMain(d);
       updateSidebar(d);
       setLegs(legsOn);
+      syncPlanHash();
     }
   });
 });
+
+
+// -- Shareable plan links ---------------------------------------------------
+// The whole plan lives in the URL hash, so a link reproduces someone's
+// itinerary with no backend and nothing stored. Only nights that differ from
+// the default are encoded, keeping the common case short. Shelters are
+// referenced by slug rather than list position, so a link survives the shelter
+// list being reordered or added to.
+function planSlug(name){
+  return name.toLowerCase()
+    .normalize('NFD').replace(/[̀-ͯ]/g, '')
+    .replace(/[^a-z0-9]+/g, '-')
+    .replace(/^-+|-+$/g, '');
+}
+
+function encodePlan(){
+  const parts = [], nights = [];
+  for (let d = 1; d <= 5; d++){
+    const cur = selectedNights[d], def = DEFAULT_NIGHTS[d];
+    if (cur && (!def || cur.name !== def.name)) nights.push(d + '.' + planSlug(cur.name));
+  }
+  if (nights.length) parts.push('n=' + nights.join('~'));
+  const hidden = ['R','C','A'].filter(t => !typeVisible[t]);
+  if (hidden.length) parts.push('hide=' + hidden.join(''));
+  if (legsOn) parts.push('legs=1');
+  if (activeDay) parts.push('day=' + activeDay);
+  return parts.join('&');
+}
+
+// replaceState rather than assigning location.hash: no history entry per click,
+// and no hashchange feedback loop.
+function syncPlanHash(){
+  const h = encodePlan();
+  try {
+    history.replaceState(null, '', location.pathname + location.search + (h ? '#' + h : ''));
+  } catch(e) {}
+}
+
+function readPlanHash(){
+  const raw = location.hash.replace(/^#/, '');
+  if (!raw) return null;
+  const q = {};
+  raw.split('&').forEach(kv => {
+    const i = kv.indexOf('=');
+    if (i > 0) q[kv.slice(0, i)] = decodeURIComponent(kv.slice(i + 1));
+  });
+  const out = { nights: {}, hide: [], legs: q.legs === '1', day: null, any: false };
+  if (q.n){
+    q.n.split('~').forEach(tok => {
+      const m = tok.match(/^([1-5])\.(.+)$/);
+      if (!m) return;
+      const hit = shelterIndex.find(sh => planSlug(sh.name) === m[2]);
+      if (hit){ out.nights[+m[1]] = hit; out.any = true; }
+    });
+  }
+  if (q.hide) ['R','C','A'].forEach(t => { if (q.hide.indexOf(t) >= 0) out.hide.push(t); });
+  if (q.day && /^[1-6]$/.test(q.day)) out.day = +q.day;
+  if (out.hide.length || out.legs || out.day) out.any = true;
+  return out.any ? out : null;
+}
+
+// Runs after snapshotShelterWindows(), so the per-day candidate lists stay
+// anchored to the default itinerary rather than to whatever was shared.
+function applyPlanHash(){
+  let p = null;
+  try { p = readPlanHash(); } catch(e) { return; }
+  if (!p) return;
+  let nightsChanged = false;
+  for (const d in p.nights){ selectedNights[d] = p.nights[d]; nightsChanged = true; }
+  if (nightsChanged){
+    computeDaySplits();
+    updateDayCards();
+    for (let d = 1; d <= 5; d++){
+      if (nightMarkers[d] && selectedNights[d]) nightMarkers[d].setLatLng(selectedNights[d].ll);
+    }
+  }
+  p.hide.forEach(t => { typeVisible[t] = false; applyTypeFilter(t); });
+  if (p.legs) setLegs(true);
+  if (p.day){
+    const card = document.getElementById('card-' + p.day);
+    if (card) card.click();
+  } else if (nightsChanged){
+    drawElevMain(activeDay);
+    updateSidebar(activeDay);
+  }
+}
+
+function copyPlanLink(){
+  syncPlanHash();
+  const url = location.href;
+  const b = document.getElementById('share-btn');
+  const done = ok => {
+    if (!b) return;
+    // syncPlanHash() has already put the right URL in the address bar, so a
+    // blocked clipboard is a nuisance rather than a dead end - say where to look.
+    b.innerHTML = ok ? '&#10003; Link copied' : '&#9888; Copy from address bar';
+    setTimeout(() => { b.innerHTML = '&#128279; Copy link'; }, ok ? 1900 : 3200);
+  };
+  // file:// and plain http have no async clipboard API, and even on https it
+  // rejects if the document is not focused - so this stays as a fallback for
+  // the async path rather than an alternative to it.
+  const legacyCopy = () => {
+    const ta = document.createElement('textarea');
+    ta.value = url;
+    ta.style.cssText = 'position:fixed;top:-1000px';
+    document.body.appendChild(ta);
+    ta.focus();
+    ta.select();
+    let ok = false;
+    try { ok = document.execCommand('copy'); } catch(e) {}
+    document.body.removeChild(ta);
+    return ok;
+  };
+  if (navigator.clipboard && window.isSecureContext){
+    navigator.clipboard.writeText(url).then(() => done(true), () => done(legacyCopy()));
+    return;
+  }
+  done(legacyCopy());
+}
 
 // ── GPX loader ──────────────────────────────────────────────────────────────
 function calcDayStats(day) {
@@ -1991,22 +2168,6 @@ document.addEventListener('drop', e => {
   + '#geo-readout .warn{color:#ffb060;}';
   document.head.appendChild(geoStyle);
 
-  // Cumulative distance along TRACK. Rebuilt per fix so it follows the route
-  // when the user changes an overnight stop and Day 6 is re-routed.
-  function cumTrack(){
-    const c = new Array(TRACK.length); c[0] = 0;
-    for (let i = 1; i < TRACK.length; i++) c[i] = c[i-1] + kmBetween(TRACK[i-1], TRACK[i]);
-    return c;
-  }
-  function nearestTrackIdx(ll){
-    let best = Infinity, bi = 0;
-    for (let i = 0; i < TRACK.length; i++){
-      const d = kmBetween(ll, TRACK[i]);
-      if (d < best){ best = d; bi = i; }
-    }
-    return { idx: bi, km: best };
-  }
-
   let watching = false, geoMarker = null, geoCircle = null, firstFix = true;
 
   const geoBtn = L.control({ position:'topright' });
@@ -2083,16 +2244,16 @@ document.addEventListener('drop', e => {
     setBtn(true, '&#9678; Tracking &middot; tap to stop');
 
     // Position relative to the route, and to the next place you could sleep.
-    const cum  = cumTrack();
-    const me   = nearestTrackIdx(ll);
-    const myKm = cum[me.idx];
+    const ri   = routeIndex();
+    const me   = nearestTrackIdxFast(ll);
+    const myKm = ri.cum[me.idx];
     const offM = Math.round(me.km * 1000);
 
     // Only shelters of a type still shown in the legend filter, and only ones
     // further along the route than we are - matches the leg-distance chain.
     const ahead = shelterIndex
       .filter(function(s){ return typeVisible[s.type]; })
-      .map(function(s){ const t = nearestTrackIdx(s.ll); return { s:s, km:cum[t.idx] }; })
+      .map(function(s){ return { s:s, km: ri.proj.get(s.name).km }; })
       .filter(function(x){ return x.km > myKm + 0.15; })
       .sort(function(a,b){ return a.km - b.km; })[0];
 
@@ -2133,6 +2294,9 @@ document.addEventListener('drop', e => {
     }
   });
 })();
+
+// A shared link is applied last, once every control it may touch exists.
+applyPlanHash();
 
 // ---------------------------------------------------------------------------
 // Offline support.
