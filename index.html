@@ -837,7 +837,7 @@ body{background:#0f1923;color:#d4dde6;font-family:'Segoe UI',Arial,sans-serif;fo
       <h3>Overnight Stops</h3>
 
       <div class="stop hut">
-        <div class="stop-night">Night 1 &middot; Sat 12 Sep &middot; After 17.4 km</div>
+        <div class="stop-night">Night 1 &middot; Sat 12 Sep &middot; After <span class="stop-km" data-day="1">17.4</span> km</div>
         <div class="stop-name">Cabane de Lourdes &mdash; 1,947 m</div>
         <div class="stop-ele">Unattended &middot; 6 places &middot; End of D1</div>
         <div class="stop-info">
@@ -848,7 +848,7 @@ body{background:#0f1923;color:#d4dde6;font-family:'Segoe UI',Arial,sans-serif;fo
       </div>
 
       <div class="stop hut">
-        <div class="stop-night">Night 2 &middot; Sun 13 Sep &middot; After 19.9 km</div>
+        <div class="stop-night">Night 2 &middot; Sun 13 Sep &middot; After <span class="stop-km" data-day="2">19.9</span> km</div>
         <div class="stop-name">Cabane d'Estaubé &mdash; 1,765 m</div>
         <div class="stop-ele">Unattended &middot; 8 places &middot; D2/D3 &middot; Parc National</div>
         <div class="stop-info">
@@ -860,7 +860,7 @@ body{background:#0f1923;color:#d4dde6;font-family:'Segoe UI',Arial,sans-serif;fo
       </div>
 
       <div class="stop hut">
-        <div class="stop-night">Night 3 &middot; Mon 14 Sep &middot; After 24.9 km</div>
+        <div class="stop-night">Night 3 &middot; Mon 14 Sep &middot; After <span class="stop-km" data-day="3">24.9</span> km</div>
         <div class="stop-name">Refugio de Barrosa (Spain) &mdash; 1,745 m</div>
         <div class="stop-ele">Unattended &middot; 12 places &middot; D3</div>
         <div class="stop-info">
@@ -870,7 +870,7 @@ body{background:#0f1923;color:#d4dde6;font-family:'Segoe UI',Arial,sans-serif;fo
       </div>
 
       <div class="stop hut">
-        <div class="stop-night">Night 4 &middot; Tue 15 Sep &middot; After 26.7 km</div>
+        <div class="stop-night">Night 4 &middot; Tue 15 Sep &middot; After <span class="stop-km" data-day="4">26.7</span> km</div>
         <div class="stop-name">Refugio de Viados (Spain) &mdash; ~1,760 m</div>
         <div class="stop-ele">Staffed seasonal &middot; Full services &middot; D4/D5</div>
         <div class="stop-info">
@@ -881,7 +881,7 @@ body{background:#0f1923;color:#d4dde6;font-family:'Segoe UI',Arial,sans-serif;fo
       </div>
 
       <div class="stop hut">
-        <div class="stop-night">Night 5 &middot; Wed 16 Sep &middot; After 20.8 km</div>
+        <div class="stop-night">Night 5 &middot; Wed 16 Sep &middot; After <span class="stop-km" data-day="5">20.8</span> km</div>
         <div class="stop-name">Refuge du Portillon &mdash; 2,571 m</div>
         <div class="stop-ele">30-place unattended section year-round &middot; D5/D6</div>
         <div class="stop-info">
@@ -1938,7 +1938,7 @@ const origStopsHTML = document.getElementById('stops-box').innerHTML;
 const _dayTitles = {1:'Sat 12 Sep · D1',2:'Sun 13 Sep · D2',3:'Mon 14 Sep · D3',4:'Tue 15 Sep · D4',5:'Wed 16 Sep · D5',6:'Thu 17 Sep · D6'};
 function updateSidebar(day){
   const box=document.getElementById('stops-box');
-  if(!day){box.innerHTML=origStopsHTML;return;}
+  if(!day){box.innerHTML=origStopsHTML;refreshStopKm();return;}
   const shelters=getDayShelters(day);
   if(!TRACK.filter(p=>p[3]===day).length)return;
   const dayColor=COLORS[day];
@@ -2132,21 +2132,72 @@ function copyPlanLink(){
 }
 
 // ── GPX loader ──────────────────────────────────────────────────────────────
+// Cumulative ascent is resolution-dependent: counting every rise over 3 m gives
+// a bigger number the more densely the track is sampled. On this route the same
+// hillside yields 8,032 m at 496 points and 9,135 m at 7,912 - a 14% swing from
+// sampling alone. BRouter's elevations come from SRTM at ~30 m ground
+// resolution, so points 17 m apart are sampling below the data's own detail and
+// largely measuring its stair-stepping.
+//
+// So the profile is resampled to a fixed 25 m horizontal interval before the
+// 3 m threshold is applied. Between 10 m and 30 m intervals the result moves
+// less than 1%, and re-densifying the track no longer silently changes the
+// advertised climb.
+// Deliberately NOT a module-level const: updateDayCards() calls calcDayStats()
+// during startup, long before this point in the file is evaluated, so a const
+// here sits in the temporal dead zone and throws - killing the rest of the
+// script. Same trap as SHELTER_WINDOW_PAD_KM. Function declarations hoist;
+// const does not.
+function elevSampleM(){ return 25; }
+
+function elevProfile(pts, interval) {
+  if (pts.length < 2) return pts.map(p => p[2]);
+  const cum = [0];
+  for (let i = 1; i < pts.length; i++) {
+    cum.push(cum[i-1] + kmBetween(pts[i-1], pts[i]) * 1000);
+  }
+  const total = cum[cum.length - 1];
+  const out = [];
+  let j = 0;
+  for (let target = 0; target <= total; target += interval) {
+    while (j < cum.length - 2 && cum[j+1] < target) j++;
+    const span = cum[j+1] - cum[j];
+    const t = span <= 0 ? 0 : (target - cum[j]) / span;
+    out.push(pts[j][2] + t * (pts[j+1][2] - pts[j][2]));
+  }
+  return out;
+}
+
 function calcDayStats(day) {
   const pts = TRACK.filter(p => p[3] === day);
-  let dist = 0, gain = 0, loss = 0, maxEle = pts.length ? pts[0][2] : 0, prevEle = pts.length ? pts[0][2] : 0;
+  let dist = 0, maxEle = pts.length ? pts[0][2] : 0;
   for (let i = 1; i < pts.length; i++) {
-    const dlat = (pts[i][0] - pts[i-1][0]) * 111.0;
-    const dlon = (pts[i][1] - pts[i-1][1]) * 111.0 * Math.cos((pts[i][0] + pts[i-1][0]) / 2 * Math.PI / 180);
-    dist += Math.sqrt(dlat*dlat + dlon*dlon);
-    const de = pts[i][2] - prevEle;
-    if (Math.abs(de) > 3) { // filter noise
-      if (de > 0) gain += de; else loss += -de;
-      prevEle = pts[i][2];
-    }
+    dist += kmBetween(pts[i-1], pts[i]);
     maxEle = Math.max(maxEle, pts[i][2]);
   }
+  let gain = 0, loss = 0;
+  const prof = elevProfile(pts, elevSampleM());
+  let prevEle = prof.length ? prof[0] : 0;
+  for (let i = 1; i < prof.length; i++) {
+    const de = prof[i] - prevEle;
+    if (Math.abs(de) > 3) {           // filter noise
+      if (de > 0) gain += de; else loss += -de;
+      prevEle = prof[i];
+    }
+  }
   return { dist, gain: Math.round(gain), loss: Math.round(loss), maxEle };
+}
+
+// The five "After N km" figures in the default sidebar were baked into the
+// markup, so they never followed a changed overnight stop and went stale when
+// the route geometry was corrected. Driven from calcDayStats now.
+function refreshStopKm(){
+  document.querySelectorAll('.stop-km').forEach(el => {
+    const d = parseInt(el.dataset.day, 10);
+    if (!d) return;
+    const st = calcDayStats(d);
+    el.textContent = st.dist.toFixed(1);
+  });
 }
 
 function updateDayCards() {
@@ -2177,6 +2228,7 @@ function updateDayCards() {
       warn.style.display = 'none';
     }
   }
+  refreshStopKm();
   const bkm = document.getElementById('badge-km');
   const bele = document.getElementById('badge-ele');
   if (bkm) bkm.textContent = `${Math.round(totalKm)} km`;
