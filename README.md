@@ -72,6 +72,34 @@ downloads". The prefetch is capped at 4 concurrent requests and skips anything
 already cached. It is a few hundred tiles for one walker, once — please don't
 loop it.
 
+## Route geometry
+
+Every route array was measured against OpenStreetMap highway geometry - the
+distance from each point to the nearest mapped way:
+
+| array | points | median | max | > 25 m |
+|---|---|---|---|---|
+| TRACK | 7,912 | 0.2 m | 55 m | 1 |
+| LUCHON_DESCENT | 1,480 | 0.2 m | 0.7 m | 0 |
+| BUS965_ROUTE | 319 | 0.2 m | 0.6 m | 0 |
+| BUS_ROUTE | 418 | 0.2 m | 0.6 m | 0 |
+
+TRACK was not always like that. It used to be a decimated 1,408-point line that
+cut switchback corners: median 3.3 m off the trail but up to 104 m, with 50
+points beyond 25 m. Because the shortcuts skipped real zigzags it **understated
+distance by 9.1%** - 121.11 km where the trail is 132.15 km. That is the
+dangerous direction for an error, since distance drives the time estimates.
+
+It was re-routed through its own waypoints with BRouter (hiking-beta), which
+keeps every curated decision - the Parzan spur and the Marcadau descent stay cut
+- while restoring the real trail between them. Verified afterwards that no point
+strays more than 250 m from the original line, so nothing new was introduced.
+Three short stretches kept their original geometry where BRouter's server-side
+watchdog repeatedly timed out.
+
+The headline total moved from 134 km to 144 km as a result. The route on the
+ground did not change; the measurement of it got honest.
+
 ## Shelter data
 
 All 55 shelters carry coordinates taken from OpenStreetMap, at full precision,
