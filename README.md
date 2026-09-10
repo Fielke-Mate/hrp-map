@@ -72,5 +72,31 @@ downloads". The prefetch is capped at 4 concurrent requests and skips anything
 already cached. It is a few hundred tiles for one walker, once — please don't
 loop it.
 
-**This is a planning aid, not a navigation system.** Carry a proper offline
-topo app and a paper map.
+## Shelter data
+
+All 55 shelters carry coordinates taken from OpenStreetMap, at full precision,
+with the source feature id recorded in each entry (`OSM node/892738761`). None
+are hand-placed.
+
+They were not always. An audit found 28 of the original 58 entered by hand at
+three decimal places (about +-55 m), and three of those sat on open hillside:
+
+- **Gite La Munia (Heas)** - a duplicate of Auberge de la Munia, pinned 464 m away
+- **Abri de Caillauas** - a duplicate of Refuge de Caillauas, the same OSM feature
+- **Cabane de Sarnes / Crabioules** - no feature of that name within 3 km of the
+  pin, and none anywhere nearby. Removed rather than shown in a guessed place.
+
+Two were also misnamed: *Cabane de Mommour* is **Cabane du Cortail de Batoua**,
+and *Gite du Maillet* is **Auberge du Maillet**.
+
+Shelter positions are drawn on the map and drive the "distance to the next place
+I could sleep" figures, so a wrong pin is a safety problem rather than a cosmetic
+one. To re-check them against current OSM, re-run the audit before a trip - huts
+are rebuilt, renamed and demolished.
+
+Leg distances now include the walk off the route to reach each shelter, marked
+with a leading `~` because the off-route portion is straight-line and therefore
+a minimum. The climb figure covers the on-route part only.
+
+**This is a planning aid, not a navigation system.** Carry a proper offline topo
+app and a paper map, and do not rely on any hut being open, stocked or standing.

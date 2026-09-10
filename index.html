@@ -685,6 +685,8 @@ body{background:#0f1923;color:#d4dde6;font-family:'Segoe UI',Arial,sans-serif;fo
 #gpx-area{flex-shrink:0;display:flex;flex-direction:column;align-items:flex-end;gap:4px}
 #share-btn{background:#162a3d;border:1px solid #3a6080;border-radius:5px;color:#7ab0d0;font-size:10px;padding:5px 9px;cursor:pointer;white-space:nowrap;margin-left:6px;font-family:inherit}
 #share-btn:hover{background:#1e3a50;color:#a0d0f0}
+#plan-warn{display:none;margin:0 14px 8px;padding:7px 11px;border-radius:6px;background:#3a2410;border:1px solid #8a5a20;color:#ffcf90;font-size:11px;line-height:1.5}
+#plan-warn b{color:#ffd8a0}
 #gpx-btn{background:#162a3d;border:1px dashed #3a6080;border-radius:5px;color:#7ab0d0;font-size:10px;padding:5px 9px;cursor:pointer;white-space:nowrap;transition:background .15s}
 #gpx-btn:hover{background:#1e3a50;color:#a0d0f0}
 #gpx-status{font-size:9px;color:#4a9fd0;white-space:nowrap}
@@ -780,6 +782,7 @@ body{background:#0f1923;color:#d4dde6;font-family:'Segoe UI',Arial,sans-serif;fo
   </div>
 </div>
 
+<div id="plan-warn" role="alert"></div>
 <div id="day-cards">
   <div class="transport-card">
     <div class="dc-title">&#128649; Transport &mdash; Fri/Sat 11-12 Sep</div>
@@ -1042,6 +1045,26 @@ function kmBetween(a, b) {
 // is only ~0.73 of a degree of latitude at 42.8N, so that metric stretched the
 // east-west axis and could pick the wrong nearest point for shelters set back
 // from the track. Everything now goes through kmBetween.
+
+// Math.min(...arr) throws past ~124k arguments (measured) and builds a fresh
+// argument list every call. These are plain O(n) with no ceiling.
+function minMax(arr){
+  let mn = Infinity, mx = -Infinity;
+  for (let i = 0; i < arr.length; i++){ const v = arr[i]; if (v < mn) mn = v; if (v > mx) mx = v; }
+  return [mn, mx];
+}
+function llBounds(pts){
+  let s0 = Infinity, w0 = Infinity, n0 = -Infinity, e0 = -Infinity;
+  for (let i = 0; i < pts.length; i++){
+    const p = pts[i];
+    if (p[0] < s0) s0 = p[0];
+    if (p[0] > n0) n0 = p[0];
+    if (p[1] < w0) w0 = p[1];
+    if (p[1] > e0) e0 = p[1];
+  }
+  return [[s0, w0], [n0, e0]];
+}
+
 let _routeIdx = null;
 let _lastFixIdx = -1;
 
@@ -1305,8 +1328,8 @@ function buildShelterLegs(){
   const legs = [];
   for (let i = 1; i < pts.length; i++) {
     const a = pts[i-1], b = pts[i];
-    const dist = b.km - a.km;
-    if (dist < 0.4) continue;                       // near-coincident shelters
+    const trackKm = b.km - a.km;
+    if (trackKm < 0.4) continue;                    // near-coincident shelters
     // Midpoint decides ownership, so a leg spanning an overnight stop belongs
     // to exactly one day rather than showing up on both.
     const midKm = (a.km + b.km) / 2;
@@ -1316,8 +1339,14 @@ function buildShelterLegs(){
       const de = TRACK[k][2] - prev;
       if (Math.abs(de) > 3) { if (de > 0) up += de; else dn += -de; prev = TRACK[k][2]; }
     }
+    // Walking A -> B means leaving A to rejoin the route, and leaving the route
+    // again to reach B. Both were ignored, which UNDERSTATED the distance - the
+    // wrong direction to be wrong in when someone is deciding whether to push on.
+    // The off-route figures are straight-line, so this remains a lower bound.
+    const detour = a.off + b.off;
+    const dist = trackKm + detour;
     const mid = TRACK[Math.round((a.idx + b.idx) / 2)];
-    legs.push({ a, b, dist, up: Math.round(up), dn: Math.round(dn), at: [mid[0], mid[1]] });
+    legs.push({ a, b, dist, trackKm, detour, up: Math.round(up), dn: Math.round(dn), at: [mid[0], mid[1]] });
   }
   return legs;
 }
@@ -1328,7 +1357,8 @@ function drawShelterLegs(){
   buildShelterLegs().forEach(L_ => {
     const html = '<div style="background:#12253a;border:1px solid #34556f;border-radius:4px;'
       + 'padding:1px 5px;color:#d6e6f4;font-size:9.5px;font-weight:600;white-space:nowrap;'
-      + 'box-shadow:0 1px 4px #000a"><b>' + L_.dist.toFixed(1) + ' km</b>'
+      + 'box-shadow:0 1px 4px #000a"><b>' + (L_.detour > 0.1 ? '&asymp;' : '')
+      + L_.dist.toFixed(1) + ' km</b>'
       + ' <span style="color:#8fd0a0">&#8593;' + L_.up + '</span>'
       + ' <span style="color:#e0a0a0">&#8595;' + L_.dn + '</span></div>';
     const tag = s => '<span style="background:' + SHELTER_STYLE[s.type].bg + ';color:'
@@ -1338,8 +1368,11 @@ function drawShelterLegs(){
       + '<br><b>' + L_.dist.toFixed(1) + ' km</b> &middot; &#8593;' + L_.up + ' m &middot; &#8595;' + L_.dn + ' m'
       + '<br>' + L_.a.ele + ' m &rarr; ' + L_.b.ele + ' m'
       + '<br><span style="color:#9ab8cc">Next: ' + SHELTER_STYLE[L_.b.type].label + '</span>'
-      + (L_.b.off > 0.3 ? '<br><i>' + L_.b.off.toFixed(1)
-                          + ' km off the track &mdash; add it both ways</i>' : '');
+      + (L_.detour > 0.1
+          ? '<br><span style="color:#ffcf90">' + L_.trackKm.toFixed(1) + ' km on the route + '
+            + L_.detour.toFixed(1) + ' km off it to reach the huts. Straight-line, so treat as a '
+            + 'minimum; the climb shown is along the route only.</span>'
+          : '');
     L.marker(L_.at, { icon: L.divIcon({ className:'', html, iconSize:[null,null] }), interactive:true })
       .bindTooltip(detail, { direction:'top', sticky:true })
       .addTo(legLayer);
@@ -1381,64 +1414,61 @@ map.on('zoomend', () => { if (legsOn) setLegs(true); });
 
 // Shelter index for sidebar filtering (all shelters, sorted west→east per day)
 const shelterIndex = [
-  {day:1,ll:[42.846702,-0.167282],name:"Cabane du Marcadau",ele:1621,short:"Unattended - Marcadau valley, OFF this route \u00b7 2.3 km off HRP \u00b7 OSM",type:"C"},
-  {day:1,ll:[42.851914,-0.147256],name:"Chalet du Clot",ele:1522,short:"Staffed - near Pont d'Espagne \u00b7 0.7 km off HRP \u00b7 OSM",type:"R"},
-  {day:1,ll:[42.792914,-0.141426],name:"Refuge des Oulettes de Gaube",ele:2151,short:"Staffed CAF refuge \u00b7 OSM",type:"R"},
-  {day:1,ll:[42.823718,-0.137797],name:"Cabane du Pinet",ele:1783,short:"Unattended wilderness hut \u00b7 OSM",type:"C"},
-  {day:1,ll:[42.779399,-0.124146],name:"Refuge de Bayssellance",ele:2651,short:"Staffed \u00b7 46pl \u00b7 CAF \u00b7 km11, on-route \u00b7 highest refuge in the Pyrenees",type:"R"},
-  {day:1,ll:[42.757,-0.094],name:"Cabane d'Ossoue",ele:1834,short:"Bare shell \u00b7 4pl \u00b7 emergency only",type:"A"},
-  {day:1,ll:[42.745,-0.092],name:"Cabane de Lourdes",ele:1947,short:"Unattended \u00b7 6pl \u00b7 metal bunks",type:"C"},
-  {day:2,ll:[42.749832,-0.073016],name:"Cabane de Milhas",ele:1680,short:"Unattended wilderness hut \u00b7 0.6 km off HRP \u00b7 OSM",type:"C"},
-  {day:2,ll:[42.738,-0.071],name:"Cabane Sausse Dessus",ele:1900,short:"Unattended \u00b7 ~8pl",type:"C"},
-  {day:2,ll:[42.741,-0.038],name:"Cabane de Tousaus",ele:1835,short:"Unattended \u00b7 ~6pl",type:"C"},
-  {day:2,ll:[42.739436,-0.022671],name:"Chalet La Grange de Holle",ele:1495,short:"Staffed - near Gavarnie \u00b7 OSM",type:"R"},
-  {day:2,ll:[42.719992,-0.017274],name:"Cabane de Pouey-Asp\u00e9",ele:1442,short:"Basic shelter \u00b7 1.1 km off HRP \u00b7 OSM",type:"A"},
-  {day:2,ll:[42.706392,-0.00718],name:"Vivac",ele:1773,short:"Bivouac spot \u00b7 1.7 km off HRP \u00b7 OSM",type:"A"},
-  {day:2,ll:[42.72,0.001],name:"Chalet-Refuge de Pailha",ele:1750,short:"Staffed \u00b7 38pl \u00b7 Jul-Aug",type:"R"},
-  {day:2,ll:[42.730373,0.004099],name:"Cabane d'Alans",ele:1905,short:"Unattended wilderness hut \u00b7 0.6 km off HRP \u00b7 OSM",type:"C"},
-  {day:2,ll:[42.719,0.007],name:"Cabane Plateau de Pailla",ele:1850,short:"Unattended \u00b7 4pl \u00b7 sleeping platform",type:"C"},
-  {day:2,ll:[42.72,0.012],name:"Refuge des Espuguettes",ele:2027,short:"Staffed \u00b7 54pl \u00b7 May-Sep",type:"R"},
-  {day:2,ll:[42.697671,0.040194],name:"Refugio de Tucarroya",ele:2666,short:"Unattended (Spain) - high \u00b7 1.7 km off HRP \u00b7 OSM",type:"C"},
-  {day:3,ll:[42.73,0.049],name:"Cabane d'Estaub\u00e9",ele:1765,short:"Unattended \u00b7 8pl \u00b7 mattresses",type:"C"},
-  {day:3,ll:[42.762086,0.07785],name:"Cabane de Camplong",ele:2031,short:"Basic shelter \u00b7 0.9 km off HRP \u00b7 OSM",type:"A"},
-  {day:3,ll:[42.752,0.082],name:"G\u00eete La Munia (H\u00e9as)",ele:1570,short:"Staffed \u00b7 12 beds \u00b7 seasonal",type:"R"},
-  {day:3,ll:[42.74237,0.084862],name:"Cabane de Groutte",ele:1549,short:"Unattended wilderness hut \u00b7 0.8 km off HRP \u00b7 OSM",type:"C"},
-  {day:3,ll:[42.736,0.087],name:"G\u00eete du Maillet",ele:1837,short:"Staffed \u00b7 32 beds \u00b7 May-Oct",type:"R"},
-  {day:3,ll:[42.750794,0.087446],name:"Auberge de la Munia",ele:1519,short:"Staffed auberge - Heas \u00b7 OSM",type:"R"},
-  {day:3,ll:[42.759,0.098],name:"Cabane de Aguila",ele:1900,short:"Unattended \u00b7 4pl \u00b7 bunks",type:"C"},
-  {day:3,ll:[42.73,0.099],name:"Cabane de la Vierge",ele:2099,short:"Bare shell \u00b7 6pl \u00b7 fireplace",type:"A"},
-  {day:3,ll:[42.756407,0.112084],name:"Cabane des Aguilous",ele:2285,short:"Unattended wilderness hut \u00b7 OSM",type:"C"},
-  {day:3,ll:[42.736,0.113],name:"Cabane des Aires",ele:2132,short:"Unattended \u00b7 5pl \u00b7 renovated",type:"C"},
-  {day:3,ll:[42.734414,0.143864],name:"Abri sommaire Baroude",ele:2382,short:"Basic shelter \u00b7 OSM",type:"A"},
-  {day:3,ll:[42.683636,0.145294],name:"Refugio Montarruego (\u00f3 Barbietos)",ele:1732,short:"Unattended (Spain) \u00b7 2.4 km off HRP \u00b7 OSM",type:"C"},
-  {day:3,ll:[42.704,0.157],name:"Refugio de Barrosa (Spain)",ele:1745,short:"Unattended \u00b7 12pl \u00b7 wood stove \u00b7 ~3km from HRP",type:"C"},
-  {day:3,ll:[42.734,0.173],name:"Abri de Port Vieux de Bielsa",ele:2375,short:"Rain/wind break \u00b7 emergency cover only",type:"A"},
-  {day:4,ll:[42.677283,0.273615],name:"Refugio de Barannetas",ele:1990,short:"Basic shelter (Spain) \u00b7 OSM",type:"A"},
-  {day:4,ll:[42.668233,0.282353],name:"Refugio Urdiceto",ele:2282,short:"Unattended (Spain) \u00b7 0.5 km off HRP \u00b7 OSM",type:"C"},
-  {day:4,ll:[42.66871,0.290528],name:"Refugio del Paso de los Caballos",ele:2310,short:"Unattended (Spain) \u00b7 OSM",type:"C"},
-  {day:4,ll:[42.708,0.294],name:"Hospice du Rioumajou",ele:1560,short:"Staffed \u00b7 24 beds \u00b7 Jun-Nov",type:"R"},
-  {day:4,ll:[42.685,0.3],name:"Cabane de Mommour",ele:2250,short:"Unattended \u00b7 4-6pl \u00b7 bunk beds",type:"C"},
-  {day:4,ll:[42.66,0.326],name:"Cabane de Sallena (Spain)",ele:1890,short:"Bare shell \u00b7 3pl \u00b7 fireplace",type:"A"},
-  {day:4,ll:[42.652453,0.34011],name:"Bordes de Licierte (Spain)",ele:1760,short:"Unattended \u00b7 4pl \u00b7 fireplace",type:"C"},
-  {day:4,ll:[42.673887,0.361024],name:"Refugio de Tabern\u00e9s (Spain)",ele:1900,short:"Unattended \u00b7 wilderness hut \u00b7 1.7 km off HRP",type:"C"},
-  {day:4,ll:[42.658762,0.369631],name:"Refugio de Es Plans",ele:1569,short:"Unattended (Spain) \u00b7 OSM",type:"C"},
-  {day:4,ll:[42.660624,0.377273],name:"Refugio de Viados (Spain)",ele:1760,short:"Staffed \u00b7 seasonal \u00b7 full services",type:"R"},
-  {day:5,ll:[42.666,0.393],name:"Cabane Puyarueso (Spain)",ele:1840,short:"Unattended \u00b7 1p \u00b7 emergency only",type:"C"},
-  {day:5,ll:[42.662919,0.397705],name:"Cabana de la Basa",ele:1825,short:"Basic shelter (Spain) \u00b7 0.4 km off HRP \u00b7 OSM",type:"A"},
-  {day:5,ll:[42.68,0.409],name:"Cabana Anes Cruces (Spain)",ele:2100,short:"Unattended \u00b7 4pl \u00b7 deteriorating",type:"C"},
-  {day:5,ll:[42.722656,0.41994],name:"Refuge de la Soula",ele:1690,short:"Staffed \u00b7 60pl \u00b7 Jun-Sep",type:"R"},
-  {day:5,ll:[42.715234,0.427398],name:"Abri de La Neste de Clarabide",ele:2102,short:"Basic shelter \u00b7 OSM",type:"A"},
-  {day:5,ll:[42.704,0.438],name:"Cabane de Prat-Cazeneuve",ele:2020,short:"Unattended \u00b7 10pl \u00b7 mattresses",type:"C"},
-  {day:5,ll:[42.721,0.442],name:"Abri de Caillauas",ele:2080,short:"Stone/rock abri \u00b7 2-3pl",type:"A"},
-  {day:5,ll:[42.721,0.443],name:"Refuge de Caillauas",ele:2160,short:"Unattended \u00b7 4pl \u00b7 deteriorating",type:"C"},
-  {day:5,ll:[42.708994,0.467049],name:"Abri sous roche",ele:2572,short:"Rock overhang - emergency only \u00b7 OSM",type:"A"},
-  {day:6,ll:[42.732,0.486],name:"Cabane d'Arrouge",ele:2120,short:"Unattended \u00b7 excellent Aug 2025",type:"C"},
-  {day:6,ll:[42.731,0.5],name:"Refuge d'Espingo (CAF)",ele:1967,short:"Staffed \u00b7 60pl \u00b7 May-Oct",type:"R"},
-  {day:6,ll:[42.704,0.508],name:"Refuge du Portillon",ele:2571,short:"Staffed \u00b7 80pl \u00b7 Jun-Oct \u00b7 ~1.5km from HRP",type:"R"},
-  {day:6,ll:[42.737,0.528],name:"Cabane Nouvelle de Coum\u00e9 N\u00e8re",ele:2100,short:"Unattended \u00b7 6pl \u00b7 check reports",type:"C"},
-  {day:6,ll:[42.725,0.53],name:"Cabane de Sarn\u00e8s / Crabioules",ele:2240,short:"Unattended \u00b7 15pl \u00b7 rebuilt 2016",type:"C"},
-  {day:6,ll:[42.714207,0.551111],name:"Refuge du Maupas (CAF)",ele:2450,short:"Staffed \u00b7 35pl \u00b7 Jun-Sep",type:"R"},
-  {day:6,ll:[42.669562,0.553763],name:"Caba\u00f1a de Lliterola",ele:2020,short:"Unattended (Spain) \u00b7 2 km off HRP \u00b7 OSM",type:"C"},
+  {day:1,ll:[42.846702,-0.167282],name:"Cabane du Marcadau",ele:1621,short:"Unattended - Marcadau valley, OFF this route \u00b7 2.3 km off HRP \u00b7 OSM way/847972982",type:"C"},
+  {day:1,ll:[42.851914,-0.147256],name:"Chalet du Clot",ele:1522,short:"Staffed - near Pont d'Espagne \u00b7 0.7 km off HRP \u00b7 OSM node/633499249",type:"R"},
+  {day:1,ll:[42.792914,-0.141426],name:"Refuge des Oulettes de Gaube",ele:2151,short:"Staffed CAF refuge \u00b7 OSM way/70178402",type:"R"},
+  {day:1,ll:[42.823718,-0.137797],name:"Cabane du Pinet",ele:1783,short:"Unattended wilderness hut \u00b7 OSM way/70177449",type:"C"},
+  {day:1,ll:[42.779400,-0.124203],name:"Refuge de Bayssellance",ele:2651,short:"Staffed \u00b7 46pl \u00b7 CAF \u00b7 km11, on-route \u00b7 highest refuge in the Pyrenees \u00b7 OSM way/216881547",type:"R"},
+  {day:1,ll:[42.757170,-0.094052],name:"Cabane d'Ossoue",ele:1840,short:"Bare shell \u00b7 4pl \u00b7 emergency only \u00b7 OSM way/365334675",type:"A"},
+  {day:1,ll:[42.745299,-0.091999],name:"Cabane de Lourdes",ele:1955,short:"Unattended \u00b7 6pl \u00b7 metal bunks \u00b7 OSM way/542946679",type:"C"},
+  {day:2,ll:[42.749832,-0.073015],name:"Cabane de Milhas",ele:1680,short:"Unattended wilderness hut \u00b7 0.6 km off HRP \u00b7 OSM way/445369519",type:"C"},
+  {day:2,ll:[42.737615,-0.071265],name:"Cabane Sausse Dessus",ele:1900,short:"Unattended \u00b7 ~8pl \u00b7 OSM way/243491480",type:"C"},
+  {day:2,ll:[42.741383,-0.037884],name:"Cabane de Tousaus",ele:1835,short:"Unattended \u00b7 ~6pl \u00b7 OSM way/547761601",type:"C"},
+  {day:2,ll:[42.739435,-0.022671],name:"Chalet La Grange de Holle",ele:1495,short:"Staffed - near Gavarnie \u00b7 OSM way/98660819",type:"R"},
+  {day:2,ll:[42.719992,-0.017274],name:"Cabane de Pouey-Asp\u00e9",ele:1442,short:"Basic shelter \u00b7 1.1 km off HRP \u00b7 OSM way/208907199",type:"A"},
+  {day:2,ll:[42.706392,-0.007180],name:"Vivac",ele:1773,short:"Bivouac spot \u00b7 1.7 km off HRP \u00b7 OSM node/12127701820",type:"A"},
+  {day:2,ll:[42.719606,0.000507],name:"Chalet-Refuge de Pailha",ele:1750,short:"Staffed \u00b7 38pl \u00b7 Jul-Aug \u00b7 OSM way/208700519",type:"R"},
+  {day:2,ll:[42.730373,0.004099],name:"Cabane d'Alans",ele:1905,short:"Unattended wilderness hut \u00b7 0.6 km off HRP \u00b7 OSM way/210932760",type:"C"},
+  {day:2,ll:[42.718399,0.007206],name:"Cabane Plateau de Pailla",ele:1850,short:"Unattended \u00b7 4pl \u00b7 sleeping platform \u00b7 OSM way/208776530",type:"C"},
+  {day:2,ll:[42.719882,0.012223],name:"Refuge des Espuguettes",ele:2027,short:"Staffed \u00b7 54pl \u00b7 May-Sep \u00b7 OSM way/565561215",type:"R"},
+  {day:2,ll:[42.697671,0.040194],name:"Refugio de Tucarroya",ele:2666,short:"Unattended (Spain) - high \u00b7 1.7 km off HRP \u00b7 OSM way/757649291",type:"C"},
+  {day:3,ll:[42.729480,0.049255],name:"Cabane d'Estaub\u00e9",ele:1765,short:"Unattended \u00b7 8pl \u00b7 mattresses \u00b7 OSM node/7915603641",type:"C"},
+  {day:3,ll:[42.762086,0.077850],name:"Cabane de Camplong",ele:2031,short:"Basic shelter \u00b7 0.9 km off HRP \u00b7 OSM node/963808654",type:"A"},
+  {day:3,ll:[42.742370,0.084862],name:"Cabane de Groutte",ele:1549,short:"Unattended wilderness hut \u00b7 0.8 km off HRP \u00b7 OSM node/13057573101",type:"C"},
+  {day:3,ll:[42.736363,0.086674],name:"Auberge du Maillet",ele:1837,short:"Staffed \u00b7 32 beds \u00b7 May-Oct \u00b7 OSM node/1426496991",type:"R"},
+  {day:3,ll:[42.750794,0.087446],name:"Auberge de la Munia",ele:1519,short:"Staffed auberge - Heas \u00b7 OSM node/892738761",type:"R"},
+  {day:3,ll:[42.758926,0.097628],name:"Cabane de Aguila",ele:1910,short:"Unattended \u00b7 4pl \u00b7 bunks \u00b7 OSM way/848280033",type:"C"},
+  {day:3,ll:[42.730129,0.099447],name:"Cabane de la Vierge",ele:2099,short:"Bare shell \u00b7 6pl \u00b7 fireplace \u00b7 OSM way/179776895",type:"A"},
+  {day:3,ll:[42.756407,0.112084],name:"Cabane des Aguilous",ele:2285,short:"Unattended wilderness hut \u00b7 OSM way/848288750",type:"C"},
+  {day:3,ll:[42.735677,0.113206],name:"Cabane des Aires",ele:2132,short:"Unattended \u00b7 5pl \u00b7 renovated \u00b7 OSM node/963810696",type:"C"},
+  {day:3,ll:[42.734414,0.143864],name:"Abri sommaire Baroude",ele:2382,short:"Basic shelter \u00b7 OSM node/9000505914",type:"A"},
+  {day:3,ll:[42.683636,0.145294],name:"Refugio Montarruego (\u00f3 Barbietos)",ele:1732,short:"Unattended (Spain) \u00b7 2.4 km off HRP \u00b7 OSM way/845490323",type:"C"},
+  {day:3,ll:[42.704446,0.157066],name:"Refugio de Barrosa (Spain)",ele:1745,short:"Unattended \u00b7 12pl \u00b7 wood stove \u00b7 ~3km from HRP \u00b7 OSM way/848321849",type:"C"},
+  {day:3,ll:[42.733863,0.173475],name:"Abri de Port Vieux de Bielsa",ele:2375,short:"Rain/wind break \u00b7 emergency cover only \u00b7 OSM node/4426663042",type:"A"},
+  {day:4,ll:[42.677283,0.273615],name:"Refugio de Barannetas",ele:1990,short:"Basic shelter (Spain) \u00b7 OSM node/10598498352",type:"A"},
+  {day:4,ll:[42.668233,0.282353],name:"Refugio Urdiceto",ele:2282,short:"Unattended (Spain) \u00b7 0.5 km off HRP \u00b7 OSM way/754505085",type:"C"},
+  {day:4,ll:[42.668710,0.290528],name:"Refugio del Paso de los Caballos",ele:2310,short:"Unattended (Spain) \u00b7 OSM way/848732317",type:"C"},
+  {day:4,ll:[42.708004,0.293906],name:"Hospice du Rioumajou",ele:1567,short:"Staffed \u00b7 24 beds \u00b7 Jun-Nov \u00b7 OSM node/5250543968",type:"R"},
+  {day:4,ll:[42.684558,0.300504],name:"Cabane du Cortail de Batoua",ele:2250,short:"Unattended \u00b7 4-6pl \u00b7 bunk beds \u00b7 OSM way/543297570",type:"C"},
+  {day:4,ll:[42.660487,0.325691],name:"Cabane de Sallena (Spain)",ele:1890,short:"Bare shell \u00b7 3pl \u00b7 fireplace \u00b7 OSM way/754279942",type:"A"},
+  {day:4,ll:[42.652453,0.340110],name:"Bordes de Licierte (Spain)",ele:1760,short:"Unattended \u00b7 4pl \u00b7 fireplace \u00b7 OSM way/755170679",type:"C"},
+  {day:4,ll:[42.673887,0.361024],name:"Refugio de Tabern\u00e9s (Spain)",ele:1900,short:"Unattended \u00b7 wilderness hut \u00b7 1.7 km off HRP \u00b7 OSM way/1308878376",type:"C"},
+  {day:4,ll:[42.658762,0.369631],name:"Refugio de Es Plans",ele:1569,short:"Unattended (Spain) \u00b7 OSM way/738708858",type:"C"},
+  {day:4,ll:[42.660624,0.377273],name:"Refugio de Viados (Spain)",ele:1760,short:"Staffed \u00b7 seasonal \u00b7 full services \u00b7 OSM relation/20517366",type:"R"},
+  {day:5,ll:[42.665537,0.393227],name:"Cabane Puyarueso (Spain)",ele:1840,short:"Unattended \u00b7 1p \u00b7 emergency only \u00b7 OSM way/373861318",type:"C"},
+  {day:5,ll:[42.662919,0.397705],name:"Cabana de la Basa",ele:1825,short:"Basic shelter (Spain) \u00b7 0.4 km off HRP \u00b7 OSM way/735202944",type:"A"},
+  {day:5,ll:[42.680039,0.408645],name:"Cabana Anes Cruces (Spain)",ele:2075,short:"Unattended \u00b7 4pl \u00b7 deteriorating \u00b7 OSM way/848771772",type:"C"},
+  {day:5,ll:[42.722656,0.419940],name:"Refuge de la Soula",ele:1690,short:"Staffed \u00b7 60pl \u00b7 Jun-Sep \u00b7 OSM way/169599070",type:"R"},
+  {day:5,ll:[42.715234,0.427398],name:"Abri de La Neste de Clarabide",ele:2102,short:"Basic shelter \u00b7 OSM node/968204919",type:"A"},
+  {day:5,ll:[42.703476,0.437399],name:"Cabane de Prat-Cazeneuve",ele:2020,short:"Unattended \u00b7 10pl \u00b7 mattresses \u00b7 OSM way/316449562",type:"C"},
+  {day:5,ll:[42.720984,0.442257],name:"Refuge de Caillauas",ele:2160,short:"Unattended \u00b7 4pl \u00b7 deteriorating \u00b7 OSM node/968202938",type:"A"},
+  {day:5,ll:[42.708994,0.467049],name:"Abri sous roche",ele:2572,short:"Rock overhang - emergency only \u00b7 OSM node/4965378632",type:"A"},
+  {day:6,ll:[42.732098,0.486105],name:"Cabane d'Arrouge",ele:2120,short:"Unattended \u00b7 excellent Aug 2025 \u00b7 OSM way/571061336",type:"C"},
+  {day:6,ll:[42.730519,0.499570],name:"Refuge d'Espingo (CAF)",ele:1967,short:"Staffed \u00b7 60pl \u00b7 May-Oct \u00b7 OSM way/96705271",type:"R"},
+  {day:6,ll:[42.703849,0.508113],name:"Refuge du Portillon",ele:2570,short:"Staffed \u00b7 80pl \u00b7 Jun-Oct \u00b7 ~1.5km from HRP \u00b7 OSM way/326817179",type:"R"},
+  {day:6,ll:[42.736861,0.529576],name:"Cabane Nouvelle de Coum\u00e9 N\u00e8re",ele:2147,short:"Unattended \u00b7 6pl \u00b7 check reports \u00b7 OSM node/968204230",type:"C"},
+  {day:6,ll:[42.714810,0.549120],name:"Refuge du Maupas (CAF)",ele:2450,short:"Staffed \u00b7 35pl \u00b7 Jun-Sep \u00b7 OSM node/11190742937",type:"R"},
+  {day:6,ll:[42.669562,0.553763],name:"Caba\u00f1a de Lliterola",ele:2020,short:"Unattended (Spain) \u00b7 2 km off HRP \u00b7 OSM way/390798950",type:"C"},
 ];
 
 // Rich popup text, keyed by shelter name. Coordinates deliberately live ONLY in
@@ -1454,15 +1484,14 @@ const SHELTER_INFO = {
   "Cabane Plateau de Pailla": '<h4>Cabane Plateau de Pailla</h4><p class="p-info"><b>1,850 m &middot; Unattended &middot; 4 places</b><br>Wooden sleeping platform &middot; 1 mattress<br>Water ~100m descent &middot; 0.55 km from Chalet Pailha &middot; D2</p>',
   "Refuge des Espuguettes": '<h4>Refuge des Espuguettes</h4><p class="p-info">2,027 m &middot; Staffed May-Sep &middot; 54 places<br><b>8-place winter room open year-round</b><br>Above Gavarnie on route toward H&eacute;as &middot; D2</p>',
   "Cabane d'Estaub\u00e9": '<h4>Cabane d\'Estaubé</h4><p class="p-info"><b>1,765 m &middot; Unattended &middot; 8 places</b><br>Mattresses &middot; tables &middot; water tap outside<br>Clean (Oct 2025) &middot; Parc National des Pyr&eacute;n&eacute;es<br>On HRP in Estaube cirque &middot; D2/D3</p>',
-  "G\u00eete La Munia (H\u00e9as)": '<h4>Gîte-Auberge La Munia (H&eacute;as)</h4><p class="p-info">~1,570 m &middot; Staffed seasonal &middot; 12 beds<br>Meals served &middot; H&eacute;as village<br>HRP stop, D2/D3 transition</p>',
-  "G\u00eete du Maillet": '<h4>Gîte-Auberge du Maillet</h4><p class="p-info">1,837 m &middot; Staffed mid-May to mid-Oct<br>32 beds (dorm + private rooms) &middot; Meals<br>On HRP &middot; Tel: 05 62 92 48 97 &middot; D3</p>',
+  "Auberge du Maillet": '<h4>Gîte-Auberge du Maillet</h4><p class="p-info">1,837 m &middot; Staffed mid-May to mid-Oct<br>32 beds (dorm + private rooms) &middot; Meals<br>On HRP &middot; Tel: 05 62 92 48 97 &middot; D3</p>',
   "Cabane de Aguila": '<h4>Cabane de Aguila</h4><p class="p-info"><b>1,900 m &middot; Unattended &middot; 4 places</b><br>Metal bunks &middot; functional door &amp; fireplace<br>Water nearby &middot; Good condition &middot; D2/D3</p>',
   "Cabane de la Vierge": '<h4>Cabane de la Vierge</h4><p class="p-info"><b>2,099 m &middot; Bare shell &middot; 6 places (floor)</b><br>Fireplace (bring wood) &middot; no furniture or mattresses<br>Cirque de Troumouse area &middot; D3</p>',
   "Cabane des Aires": '<h4>Cabane des Aires</h4><p class="p-info"><b>2,132 m &middot; Unattended &middot; 5 places</b><br>Renovated 2004 &middot; well-maintained &amp; clean<br>On route toward Pic de la Munia &amp; Barroude &middot; D3</p>',
   "Refugio de Barrosa (Spain)": '<h4>Refugio de Barrosa (Spain)</h4><p class="p-info"><b>1,745 m &middot; Unattended &middot; 12 places</b><br>Renovated &middot; wood stove &middot; good condition<br>~3 km from HRP &middot; Best shelter on this section &middot; D3</p>',
   "Abri de Port Vieux de Bielsa": '<h4>Abri de Port Vieux de Bielsa</h4><p class="p-info"><b>2,375 m &middot; Rain/wind break only</b><br>Small concrete box &middot; no door &middot; too small to sleep<br><b>Directly on HRP at the col</b><br>Emergency cover only &middot; D3</p>',
   "Hospice du Rioumajou": '<h4>Hospice du Rioumajou</h4><p class="p-info">1,560 m &middot; Staffed late Jun-Nov &middot; 24 beds<br>4-bed unattended annex year-round<br><b>On older French-side variant</b> (main HRP via Spain)<br><a href="https://hospicedurioumajou.fr" target="_blank">hospicedurioumajou.fr</a></p>',
-  "Cabane de Mommour": '<h4>Cabane de Mommour</h4><p class="p-info"><b>~2,250 m &middot; Unattended &middot; 4-6 places</b><br>Recently restored shepherd\'s annex &middot; bunk beds &amp; table<br>Water stream behind &middot; Spanish side &middot; D3/D4</p>',
+  "Cabane du Cortail de Batoua": '<h4>Cabane de Mommour</h4><p class="p-info"><b>~2,250 m &middot; Unattended &middot; 4-6 places</b><br>Recently restored shepherd\'s annex &middot; bunk beds &amp; table<br>Water stream behind &middot; Spanish side &middot; D3/D4</p>',
   "Cabane de Sallena (Spain)": '<h4>Cabane de Sallena (Spain)</h4><p class="p-info"><b>1,890 m &middot; Bare shell &middot; 3 places (floor)</b><br>Fireplace &middot; water nearby &middot; dry grass floor<br>Poor condition (V&eacute;ron HRP guide) &middot; D4</p>',
   "Bordes de Licierte (Spain)": '<h4>Bordes de Licierte (Spain)</h4><p class="p-info"><b>1,760 m &middot; Unattended &middot; 4 places</b><br>Good condition (2022) &middot; fireplace &middot; wood &middot; water nearby<br>Bielsa valley on V&eacute;ron HRP guide &middot; D4</p>',
   "Refugio de Viados (Spain)": '<h4>Refugio de Viados (Spain)</h4><p class="p-info">~1,760 m &middot; Staffed seasonal<br>Full services: meals, beds, showers<br>Key stage on Spanish section of HRP &middot; D3/D4</p>',
@@ -1470,13 +1499,11 @@ const SHELTER_INFO = {
   "Cabana Anes Cruces (Spain)": '<h4>Cabana Anes Cruces (Spain)</h4><p class="p-info">2,100 m &middot; Unattended &middot; 4 places<br><b>Deteriorating (damaged door &amp; roof 2024)</b><br>Emergency only &mdash; check recent reports &middot; D4/D5</p>',
   "Refuge de la Soula": '<h4>Refuge de la Soula</h4><p class="p-info">1,690 m &middot; Staffed Jun-Sep &middot; 60 places<br>Full meals &middot; Key HRP Louron valley stage<br>Tel: 05 62 40 23 41 &middot; D4/D5</p>',
   "Cabane de Prat-Cazeneuve": '<h4>Cabane de Prat-Cazeneuve</h4><p class="p-info"><b>2,020 m &middot; Unattended &middot; 10 places</b><br>Mattresses &middot; wood stove &middot; good condition (2024)<br>Best maintained French cabane east of Barroude &middot; D4/D5</p>',
-  "Abri de Caillauas": '<h4>Abri de Caillauas</h4><p class="p-info"><b>2,080 m &middot; Stone/rock abri &middot; 2-3 places</b><br>Carved into rock &middot; ~4 m&sup2; &middot; earth floor<br>Water on-site &middot; Last documented 2017<br>Near Lac de Caillauas &middot; D5</p>',
   "Refuge de Caillauas": '<h4>Refuge de Caillauas</h4><p class="p-info">2,160 m &middot; Unattended &middot; 4 places<br>2-3 foam mattresses &middot; functional fireplace &middot; water below<br><b>Deteriorating</b> (broken door handle, missing panels)<br>Below Lac de Caillauas &middot; D5</p>',
   "Cabane d'Arrouge": '<h4>Cabane d\'Arrouge</h4><p class="p-info"><b>2,120 m &middot; Unattended &middot; ~6 places</b><br><b>Excellent condition Aug 2025</b><br>Eastern approach to Portillon &middot; D6</p>',
   "Refuge d'Espingo (CAF)": '<h4>Refuge d\'Espingo (CAF)</h4><p class="p-info">1,967 m &middot; Staffed mid-May to mid-Oct &middot; 60 places<br><b>15-place winter room (unattended)</b><br>Last staffed hut before Luchon &middot; D6</p>',
   "Refuge du Portillon": '<h4>Refuge du Portillon</h4><p class="p-info">2,571 m &middot; Staffed Jun-Oct &middot; 80 places<br><b>Unattended section: 30 places year-round</b><br>Stove, cookware, water, mattresses &middot; D5/D6</p>',
   "Cabane Nouvelle de Coum\u00e9 N\u00e8re": '<h4>Cabane Nouvelle de Coum&eacute; N&egrave;re</h4><p class="p-info">2,100 m &middot; Unattended &middot; 6 places<br>Often locked summer (shepherd use)<br>Check recent reports &middot; D6</p>',
-  "Cabane de Sarn\u00e8s / Crabioules": '<h4>Cabane de Sarn&egrave;s / Crabioules</h4><p class="p-info"><b>2,240 m &middot; Unattended &middot; 15-16 places</b><br>Rebuilt 2016 &middot; water on-site &middot; reliable<br>Key HRP eastern stage before Luchon &middot; D6</p>',
   "Refuge du Maupas (CAF)": '<h4>Refuge du Maupas (CAF)</h4><p class="p-info">2,450 m &middot; Staffed 15 Jun-15 Sep &middot; 35 places<br>By Lac d\'Enfer &middot; HRP stage pre-Luchon &middot; D6</p>',
 };
 
@@ -1521,7 +1548,7 @@ function applyTypeFilter(t){
   const svg = document.getElementById('elev-svg');
   const W=266, H=80, PAD=4;
   const eles = TRACK.map(p=>p[2]);
-  const mn=Math.min(...eles), mx=Math.max(...eles);
+  const [mn, mx] = minMax(eles);
   const n=TRACK.length;
   const sx=i=>(i/(n-1))*(W-PAD*2)+PAD;
   const sy=e=>H-PAD-(e-mn)/(mx-mn)*(H-PAD*2);
@@ -1565,7 +1592,7 @@ const dayBounds = {};
 [1,2,3,4,5,6].forEach(d=>{
   const pts=TRACK.filter(p=>p[3]===d);
   const lats=pts.map(p=>p[0]), lons=pts.map(p=>p[1]);
-  dayBounds[d]=[[Math.min(...lats),Math.min(...lons)],[Math.max(...lats),Math.max(...lons)]];
+  const [la0,la1]=minMax(lats), [lo0,lo1]=minMax(lons); dayBounds[d]=[[la0,lo0],[la1,lo1]];
 });
 
 // Main elevation profile — redraws for full route (filterDay=null) or a single day
@@ -1582,7 +1609,7 @@ function drawElevMain(filterDay){
   const pts=filterDay?TRACK.filter(p=>p[3]===filterDay):TRACK;
   if(!pts.length)return;
   const eles=pts.map(p=>p[2]);
-  const mn=Math.min(...eles),mx=Math.max(...eles);
+  const [mn, mx] = minMax(eles);
   const n=pts.length;
   // X axis is cumulative DISTANCE, not point index. Point density varies ~9-61 pts/km
   // across days (BRouter-routed sections are far denser than the source GPX), so an
@@ -1718,7 +1745,7 @@ function computeDaySplits(){
   [1,2,3,4,5,6].forEach(d=>{
     const pts=TRACK.filter(p=>p[3]===d);
     dayLines[d].setLatLngs(pts.map(p=>[p[0],p[1]]));
-    if(pts.length) dayBounds[d]=[[Math.min(...pts.map(p=>p[0])),Math.min(...pts.map(p=>p[1]))],[Math.max(...pts.map(p=>p[0])),Math.max(...pts.map(p=>p[1]))]];
+    if(pts.length) dayBounds[d]=llBounds(pts);
   });
   const gen = ++routeGen;
   for(let d=1;d<=5;d++){
@@ -1753,7 +1780,7 @@ function applyDay6(path, gen, provisional) {
   const d6 = TRACK.filter(p => p[3] === 6);
   dayLines[6].setLatLngs(d6.map(p => [p[0], p[1]]));
   dayLines[6].setStyle({ dashArray: provisional ? '7,6' : null });
-  if (d6.length) dayBounds[6] = [[Math.min(...d6.map(p=>p[0])),Math.min(...d6.map(p=>p[1]))],[Math.max(...d6.map(p=>p[0])),Math.max(...d6.map(p=>p[1]))]];
+  if (d6.length) dayBounds[6] = llBounds(d6);
   greyRoute.setLatLngs(TRACK.map(p => [p[0], p[1]]));
   updateDayCards();
   if (typeof activeDay !== 'undefined' && activeDay) drawElevMain(activeDay);
@@ -1792,12 +1819,33 @@ async function fetchLuchonDescent(gen) {
   if (path) applyDay6(path, gen);
 }
 
-// Shelters whose longitude falls inside a day's current span
+// Which shelters belong to a day.
+//
+// This used to select on LONGITUDE alone, which only holds while the route runs
+// west-east. The HRP has long north-south legs and doubles back repeatedly, so
+// a hut at the right longitude can sit many kilometres away on a different part
+// of the route - and it would still be offered as that day's overnight stop.
+// Now measured as distance along the route, using the same projection the leg
+// distances and the GPS readout use.
 function computeShelterWindow(day){
-  const dayPts=TRACK.filter(p=>p[3]===day);
-  if(!dayPts.length)return[];
-  const minLon=Math.min(...dayPts.map(p=>p[1])),maxLon=Math.max(...dayPts.map(p=>p[1]));
-  return shelterIndex.filter(s=>s.ll[1]>=minLon-0.003&&s.ll[1]<=maxLon+0.003);
+  // Declared inside the function on purpose. snapshotShelterWindows() runs
+  // during startup, well before this point in the file is reached, so a
+  // module-level const here sits in the temporal dead zone and throws -
+  // aborting the rest of the script. Function declarations hoist; const does not.
+  const SHELTER_WINDOW_PAD_KM = 1.0;
+  const ri = routeIndex();
+  let lo = Infinity, hi = -Infinity;
+  for (let i = 0; i < TRACK.length; i++){
+    if (TRACK[i][3] !== day) continue;
+    const k = ri.cum[i];
+    if (k < lo) lo = k;
+    if (k > hi) hi = k;
+  }
+  if (lo > hi) return [];
+  return shelterIndex.filter(sh => {
+    const p = ri.proj.get(sh.name);
+    return p && p.km >= lo - SHELTER_WINDOW_PAD_KM && p.km <= hi + SHELTER_WINDOW_PAD_KM;
+  });
 }
 
 // Freeze the candidate lists at the default itinerary, so the options offered for a
@@ -1817,7 +1865,13 @@ function getDayShelters(day){
   // ...and the default, so it is never stranded
   const defN=DEFAULT_NIGHTS[day];
   if(defN&&!shelters.find(s=>s.name===defN.name)) shelters=[...shelters,defN];
-  return shelters.sort((a,b)=>a.ll[1]-b.ll[1]);
+  // Sorted along the route for the same reason: longitude order is not walking
+  // order wherever the route runs north-south.
+  const ri = routeIndex();
+  return shelters.sort((a,b)=>{
+    const pa = ri.proj.get(a.name), pb = ri.proj.get(b.name);
+    return (pa ? pa.km : 0) - (pb ? pb.km : 0);
+  });
 }
 
 
@@ -2088,14 +2142,32 @@ function calcDayStats(day) {
 
 function updateDayCards() {
   let totalKm = 0, totalGain = 0, totalLoss = 0;
+  const stalled = [];          // days an overnight stop failed to advance
   [1,2,3,4,5,6].forEach(d => {
     const s = calcDayStats(d);
+    if (d <= 5 && s.dist < 0.5) stalled.push(d);
+    const card = document.getElementById('card-'+d);
+    if (card) card.style.boxShadow = (d <= 5 && s.dist < 0.5) ? 'inset 0 0 0 1px #8a5a20' : '';
     totalKm += s.dist; totalGain += s.gain; totalLoss += s.loss;
     const el = document.querySelector('#card-'+d+' .dc-stats');
     if (!el) return;
     const h = s.dist > 0 ? Math.round(s.dist / 3.2) : '?';
     el.innerHTML = `<span><b>${s.dist.toFixed(1)} km</b></span><span>&#8593; ${s.gain.toLocaleString()} m</span><span>&#8595; ${s.loss.toLocaleString()} m</span><span>~${h} h</span><span>Max ${s.maxEle} m</span>`;
   });
+  // Nothing stops you choosing a stop at or behind the previous night, which
+  // silently produces a zero-length day and dumps its distance on the next one.
+  const warn = document.getElementById('plan-warn');
+  if (warn) {
+    if (stalled.length) {
+      warn.style.display = 'block';
+      warn.innerHTML = '&#9888; <b>Day ' + stalled.join(' and ') + ' covers under 0.5 km.</b> '
+        + 'That night\'s stop is at or behind the previous one, so the day has no walking in it and '
+        + 'the following day absorbs the distance. Choose a stop further along the route, or use '
+        + '&#8635; Restore defaults.';
+    } else {
+      warn.style.display = 'none';
+    }
+  }
   const bkm = document.getElementById('badge-km');
   const bele = document.getElementById('badge-ele');
   if (bkm) bkm.textContent = `${Math.round(totalKm)} km`;
@@ -2253,7 +2325,7 @@ document.addEventListener('drop', e => {
     // further along the route than we are - matches the leg-distance chain.
     const ahead = shelterIndex
       .filter(function(s){ return typeVisible[s.type]; })
-      .map(function(s){ return { s:s, km: ri.proj.get(s.name).km }; })
+      .map(function(s){ const p = ri.proj.get(s.name); return { s:s, km:p.km, off:p.off }; })
       .filter(function(x){ return x.km > myKm + 0.15; })
       .sort(function(a,b){ return a.km - b.km; })[0];
 
@@ -2264,12 +2336,13 @@ document.addEventListener('drop', e => {
              + '<br>' + (offM <= 60 ? 'On route' : '<span class="warn">' + offM + ' m off route</span>')
              + ' &middot; GPS &plusmn;' + Math.round(acc) + ' m';
     if (ahead){
-      const dKm  = ahead.km - myKm;
+      // include the walk off the route to reach it, as the leg labels do
+      const dKm  = (ahead.km - myKm) + ahead.off;
       const dEle = ahead.s.ele - myEle;
       // Naismith, same as the day cards: 4 km/h plus 1 h per 600 m of ascent.
       const mins = Math.round((dKm / 4 + Math.max(0, dEle) / 600) * 60);
       html += '<br><b>Next:</b> ' + ahead.s.name + '<br>'
-            + dKm.toFixed(1) + ' km &middot; '
+            + (ahead.off > 0.1 ? '&asymp;' : '') + dKm.toFixed(1) + ' km &middot; '
             + (dEle >= 0 ? '&uarr;' : '&darr;') + Math.abs(dEle) + ' m'
             + ' &middot; ~' + mins + ' min';
     } else {
@@ -2297,6 +2370,9 @@ document.addEventListener('drop', e => {
 
 // A shared link is applied last, once every control it may touch exists.
 applyPlanHash();
+// Sentinel: proves the script reached the end. A throw partway through still
+// leaves hoisted functions callable, which can look like a working page.
+window.__hrpReady = true;
 
 // ---------------------------------------------------------------------------
 // Offline support.
