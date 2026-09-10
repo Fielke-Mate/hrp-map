@@ -64,6 +64,22 @@ a phone with signal picks up the new version on next open. Bump `VERSION` in
 `sw.js` if you change `sw.js` itself. The tile cache is deliberately kept in a
 separate, unversioned cache so a redeploy never throws away a 22 MB download.
 
+## Building
+
+`index.html` is generated, not hand-edited. The source and the whole toolchain
+live in `src/`:
+
+```
+python src/build.py
+```
+
+That inlines Leaflet 1.9.4 (vendored in `src/`, so no CDN and the page works
+with no signal), adds the PWA tags, sets `crossOrigin` on the tile layer, and
+appends the offline block. It is deterministic - rebuilding without changing
+`src/hrp_wallon_luchon.html` reproduces `index.html` byte for byte.
+
+Edit `src/hrp_wallon_luchon.html`, run the build, then commit both.
+
 ## Tiles
 
 OpenTopoMap, CC-BY-SA. They serve tiles with `Cache-Control: max-age=604800`
