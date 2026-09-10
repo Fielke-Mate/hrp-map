@@ -1205,10 +1205,32 @@ if (window.matchMedia('(max-width: 820px)').matches) legendCollapsed(true);
 const legLayer = L.layerGroup();
 let legsOn = false;
 const LEG_MIN_ZOOM = 11;   // below this the labels collide into mush
+// Filtered to a single day there are ~8 labels rather than 43, so the gate can
+// drop a level. Day 4 is the widest day and fitBounds lands it on zoom 10 at
+// phone size, which would otherwise hide its legs entirely.
+const LEG_MIN_ZOOM_DAY = 10;
+function legZoomGate(){
+  return (typeof activeDay !== 'undefined' && activeDay) ? LEG_MIN_ZOOM_DAY : LEG_MIN_ZOOM;
+}
 
 function buildShelterLegs(){
   const cum = new Array(TRACK.length); cum[0] = 0;
   for (let i = 1; i < TRACK.length; i++) cum[i] = cum[i-1] + kmBetween(TRACK[i-1], TRACK[i]);
+
+  // When a day card is selected, only the legs actually walked that day. Each
+  // TRACK point carries its day in p[3], so the day is a km window along the
+  // route. `activeDay` is declared with var further down and so is hoisted -
+  // see the comment there.
+  let dayLo = -Infinity, dayHi = Infinity;
+  if (typeof activeDay !== 'undefined' && activeDay) {
+    let lo = Infinity, hi = -Infinity;
+    for (let i = 0; i < TRACK.length; i++) {
+      if (TRACK[i][3] !== activeDay) continue;
+      if (cum[i] < lo) lo = cum[i];
+      if (cum[i] > hi) hi = cum[i];
+    }
+    if (lo <= hi) { dayLo = lo; dayHi = hi; }
+  }
 
   // Only count shelter classes that are currently shown: "the next place I could
   // sleep" depends on which kinds you would actually accept.
@@ -1227,6 +1249,10 @@ function buildShelterLegs(){
     const a = pts[i-1], b = pts[i];
     const dist = b.km - a.km;
     if (dist < 0.4) continue;                       // near-coincident shelters
+    // Midpoint decides ownership, so a leg spanning an overnight stop belongs
+    // to exactly one day rather than showing up on both.
+    const midKm = (a.km + b.km) / 2;
+    if (midKm < dayLo || midKm > dayHi) continue;
     let up = 0, dn = 0, prev = TRACK[a.idx][2];
     for (let k = a.idx + 1; k <= b.idx; k++) {
       const de = TRACK[k][2] - prev;
@@ -1240,7 +1266,7 @@ function buildShelterLegs(){
 
 function drawShelterLegs(){
   legLayer.clearLayers();
-  if (!legsOn || map.getZoom() < LEG_MIN_ZOOM) return;
+  if (!legsOn || map.getZoom() < legZoomGate()) return;
   buildShelterLegs().forEach(L_ => {
     const html = '<div style="background:#12253a;border:1px solid #34556f;border-radius:4px;'
       + 'padding:1px 5px;color:#d6e6f4;font-size:9.5px;font-weight:600;white-space:nowrap;'
@@ -1284,10 +1310,12 @@ function setLegs(on){
   b.style.borderColor= on ? '#3a7ca8' : '#2a4060';
   if (on) legLayer.addTo(map); else map.removeLayer(legLayer);
   drawShelterLegs();
-  if (on && map.getZoom() < LEG_MIN_ZOOM) {
+  const ad = (typeof activeDay !== 'undefined') ? activeDay : null;
+  if (on && map.getZoom() < legZoomGate()) {
     b.innerHTML = '&#8596; Leg distances <span style="font-weight:400">(zoom in)</span>';
   } else {
-    b.innerHTML = '&#8596; Leg distances';
+    b.innerHTML = '&#8596; Leg distances'
+      + (ad ? ' <span style="font-weight:400">(D' + ad + ')</span>' : '');
   }
 }
 document.getElementById('leg-toggle').addEventListener('click', () => setLegs(!legsOn));
@@ -1849,6 +1877,7 @@ var activeDay=null;
       map.setView([42.72,0.20],10);
       drawElevMain(null);
       updateSidebar(null);
+      setLegs(legsOn);
     } else {
       activeDay=d;
       document.querySelectorAll('.day-card').forEach(c=>c.classList.remove('active'));
@@ -1857,6 +1886,7 @@ var activeDay=null;
       map.fitBounds(dayBounds[d],{padding:[30,30]});
       drawElevMain(d);
       updateSidebar(d);
+      setLegs(legsOn);
     }
   });
 });
