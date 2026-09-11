@@ -1,0 +1,3 @@
+# The build inlines these verbatim, so line endings must survive a fresh clone
+# unchanged or index.html stops reproducing byte for byte.
+* -text
