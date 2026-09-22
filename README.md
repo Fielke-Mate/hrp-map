@@ -80,6 +80,22 @@ appends the offline block. It is deterministic - rebuilding without changing
 
 Edit `src/hrp_wallon_luchon.html`, run the build, then commit both.
 
+## Exporting
+
+**Export GPX** in the header writes GPX 1.1 with a single `<trk>` - Komoot,
+Gaia and Garmin all import that reliably, whereas multiple `<trk>` elements get
+split or partly ignored. It exports the plan as it currently stands, including
+any overnight stops you have changed and the live Day 6 re-route.
+
+- **Whole route** - 8,781 points, ~590 KB
+- **Selected day** - pick a day card first; ~1,500 points, ~100 KB
+- **Overnight stops as waypoints** (on by default), or every shelter currently
+  shown on the map
+- **Reduce points** - simplifies at 5 m for apps that cap track size. Costs
+  about 2.2 km of the 144 km; the exact loss is reported after each download.
+
+Per-day files are the easier import if a tool complains about size.
+
 ## Tiles
 
 OpenTopoMap, CC-BY-SA. They serve tiles with `Cache-Control: max-age=604800`
