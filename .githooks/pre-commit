@@ -1,0 +1,11 @@
+#!/usr/bin/env bash
+# Refuse a commit whose index.html does not match its source, or that trips a
+# build guard. Committed and wired up via `git config core.hooksPath .githooks`,
+# so it survives a fresh clone once that one command is run (see README).
+set -e
+cd "$(git rev-parse --show-toplevel)"
+if ! python src/build.py --check; then
+  echo
+  echo "pre-commit: refusing. Run 'python src/build.py', then stage index.html."
+  exit 1
+fi

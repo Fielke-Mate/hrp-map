@@ -78,7 +78,33 @@ with no signal), adds the PWA tags, sets `crossOrigin` on the tile layer, and
 appends the offline block. It is deterministic - rebuilding without changing
 `src/hrp_wallon_luchon.html` reproduces `index.html` byte for byte.
 
-Edit `src/hrp_wallon_luchon.html`, run the build, then commit both.
+**`src/hrp_wallon_luchon.html` is the only source.** `index.html` is output.
+Editing `index.html` directly gets overwritten by the next build.
+
+After cloning, run this once so the pre-commit hook is active:
+
+```
+git config core.hooksPath .githooks
+```
+
+### What the build refuses to do
+
+Each guard exists because the mistake behind it actually happened here.
+
+| Guard | The mistake it prevents |
+|---|---|
+| a second copy of the source | An edit went into a top-level copy while the build read `src/`, producing a page silently missing the change |
+| `--check` (pre-commit hook) | Committing an `index.html` that does not match its source |
+| temporal-dead-zone lint | A module-level `const` read by a function that startup calls earlier in the file. It throws at load and aborts the rest of the script, but hoisted functions stay callable so the page looks alive. `node --check` cannot see it - it is a runtime error. This happened twice. |
+| `__hrpReady` sentinel | Tests asserting "the page works" when the script actually threw partway through |
+
+The TDZ lint follows the call graph, since both real cases were indirect
+(`updateDayCards` -> `calcDayStats` -> the const). Put the value inside the
+function or make it a hoisted function; `tdz-ok` in a comment on the
+declaration overrides it.
+
+Run `python src/build.py --check` any time to confirm the committed page
+matches its source.
 
 ## Exporting
 
