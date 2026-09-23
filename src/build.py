@@ -13,6 +13,8 @@ Guards against the mistakes this project has actually made:
     in the file - a temporal dead zone that throws at load, leaves hoisted
     functions callable so the page looks alive, and which `node --check`
     cannot see because it is a runtime error, not a syntax one
+  * a popup disagreeing with the shelter it belongs to, which is how a
+    renamed hut kept announcing its old name on the map
 """
 import re, os, sys, glob
 
@@ -151,6 +153,68 @@ if issues:
         + '\n   Move the value inside the function, or make it a hoisted '
           'function. Add `tdz-ok` in a comment on the line to override.')
 
+
+# --- guard 3: popups must agree with the shelter they belong to -----------
+def popup_lint(text):
+    """A popup repeats its shelter's name and elevation, so the two can drift.
+
+    They have: renaming Cabane de Mommour moved the SHELTER_INFO key but left
+    the old name in the popup's own <h4>, and correcting entry elevations left
+    two popups quoting the superseded figures.
+    """
+    import html as _html, unicodedata, json as _json
+
+    def dec(x):
+        try:
+            return _json.loads('"' + x.replace('"', '\\"') + '"')
+        except Exception:
+            return x
+
+    def norm(t):
+        t = unicodedata.normalize('NFD', t.lower())
+        t = ''.join(c for c in t if unicodedata.category(c) != 'Mn')
+        t = t.replace('(spain)', '').replace('(france)', '')
+        return re.sub(r'[^a-z0-9]', '', t)
+
+    mi = re.search(r'const shelterIndex = \[(.*?)\n\];', text, re.S)
+    mp = re.search(r'const SHELTER_INFO = \{(.*?)\n\};', text, re.S)
+    if not mi or not mp:
+        return ['could not locate shelterIndex or SHELTER_INFO']
+
+    entries = {dec(m.group(1)): int(m.group(2))
+               for m in re.finditer(r'name:"([^"]*)",ele:(\d+)', mi.group(1))}
+    out = []
+    for m in re.finditer(r'\n\s*"([^"]+)":\s*[\'"](.*?)[\'"],\s*(?=\n\s*"|\n\})',
+                         mp.group(1), re.S):
+        key, popup = dec(m.group(1)), m.group(2)
+        if key not in entries:
+            out.append('popup "%s" has no matching shelterIndex entry' % key)
+            continue
+        h4 = re.search(r'<h4>(.*?)</h4>', popup)
+        if h4:
+            shown = _html.unescape(re.sub(r'<[^>]+>', '', h4.group(1)))
+            shown = re.split(r'—|&mdash;|--', shown)[0].replace(chr(92) + "'", "'")
+            a, b = norm(key), norm(shown)
+            if a != b and a not in b and b not in a:
+                out.append('%s: popup heading says "%s"' % (key, shown.strip()))
+        p = re.search(r'<p class="p-info">(.*)', popup, re.S)
+        if p:
+            em = re.search(r'([\d][\d,]{2,5})\s*m\b', p.group(1))
+            if em:
+                v = int(em.group(1).replace(',', ''))
+                if abs(v - entries[key]) > 30:
+                    out.append('%s: popup says %d m, entry says %d m'
+                               % (key, v, entries[key]))
+    return out
+
+
+issues = popup_lint(src)
+if issues:
+    die('popup text disagrees with its shelter entry:\n'
+        + '\n'.join('   ' + p for p in issues)
+        + '\n   The popup repeats the name and elevation, so both must be '
+          'updated together. Tolerance on elevation is 30 m.')
+
 # --- 1. inline leaflet css -------------------------------------------------
 link = '<link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"/>'
 if src.count(link) != 1:
@@ -217,4 +281,4 @@ open(OUT, 'w', encoding='utf-8').write(src)
 print('source     %8.1f KB' % (orig_len / 1024))
 print('index.html %8.1f KB' % (len(src) / 1024))
 print('leaflet inlined, PWA tags added, crossOrigin set, offline block appended')
-print('guards passed: single source, no TDZ, sentinel present')
+print('guards passed: single source, no TDZ, popups consistent, sentinel present')

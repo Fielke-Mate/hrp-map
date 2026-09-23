@@ -96,6 +96,7 @@ Each guard exists because the mistake behind it actually happened here.
 | a second copy of the source | An edit went into a top-level copy while the build read `src/`, producing a page silently missing the change |
 | `--check` (pre-commit hook) | Committing an `index.html` that does not match its source |
 | temporal-dead-zone lint | A module-level `const` read by a function that startup calls earlier in the file. It throws at load and aborts the rest of the script, but hoisted functions stay callable so the page looks alive. `node --check` cannot see it - it is a runtime error. This happened twice. |
+| popup consistency | A popup's heading or elevation drifting from its `shelterIndex` entry. Renaming a hut moved the popup's key but left the old name in its `<h4>`, so the map kept announcing "Cabane de Mommour"; correcting entry elevations left two popups quoting superseded figures. Elevation tolerance 30 m. |
 | `__hrpReady` sentinel | Tests asserting "the page works" when the script actually threw partway through |
 
 The TDZ lint follows the call graph, since both real cases were indirect
