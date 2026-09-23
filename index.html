@@ -945,6 +945,12 @@ const TRACK=[[42.85162,-0.13667,1465,1],[42.85171,-0.13673,1465,1],[42.85162,-0.
 //    starts at the bus stop and goes straight up the Gaube valley.
 // Net: 121.1 km base route starting at Pont d'Espagne (1465 m).
 const TRACK_ORIG = TRACK.map(p => [...p]);
+// Set by the GPX loader. An imported route is not the HRP, so the hardcoded
+// Luchon descent must not be appended to it - that drew a straight line from
+// wherever the import was to the Pyrenees and inflated the reported distance
+// (a 17 km Corsican test route reported 751.8 km). var, not let: startup
+// reaches computeDaySplits() before this line would otherwise run.
+var routeIsImported = false;
 // --- Transport legs, all endpoints verified against OpenStreetMap ---
 // Bus 965 "Lourdes Gare SNCF -> Cauterets Gare" (OSM relation 9998509, operator CD65).
 // It departs the train station forecourt, so there is no cross-town transfer at Lourdes.
@@ -1553,8 +1559,13 @@ function applyTypeFilter(t){
   row.addEventListener('click', () => { typeVisible[t] = !typeVisible[t]; applyTypeFilter(t); syncPlanHash(); });
 });
 
-(function(){
+// Was a one-shot IIFE, so it kept showing the route as it looked at startup -
+// stale after a night change re-routed Day 6, and completely wrong after a GPX
+// import. Now a function, called wherever the route changes.
+function drawElevMini(){
   const svg = document.getElementById('elev-svg');
+  if (!svg) return;
+  while (svg.firstChild) svg.removeChild(svg.firstChild);
   const W=266, H=80, PAD=4;
   const eles = TRACK.map(p=>p[2]);
   const [mn, mx] = minMax(eles);
@@ -1592,7 +1603,8 @@ function applyTypeFilter(t){
     lbl.textContent=e+'m';
     svg.appendChild(lbl);
   });
-})();
+}
+
 
 map.setView([42.72, 0.20], 10);
 
@@ -1714,6 +1726,10 @@ function drawElevMain(filterDay){
 }
 
 // Defer first draw until layout is settled (getBoundingClientRect needs a real width)
+// Draw immediately, then again after layout settles. requestAnimationFrame
+// alone does not fire while the tab is hidden, so a page opened in a
+// background tab (or a headless test) showed an empty profile.
+drawElevMain(null);
 requestAnimationFrame(()=>drawElevMain(null));
 window.addEventListener('resize',()=>drawElevMain(typeof activeDay!=='undefined'?activeDay:null));
 
@@ -1743,19 +1759,50 @@ function computeDaySplits(){
   invalidateRouteIndex();
 
   const splits=[0];
-  for(let d=1;d<=5;d++) splits.push(selectedNights[d]?nearestTrackPoint(selectedNights[d].ll).idx:splits[splits.length-1]+1);
+  // Overnight stops only mean something if they are actually near the route.
+  // After a GPX import they usually are not, and snapping all five to whatever
+  // point happens to be closest produces meaningless days - so fall back to
+  // equal-distance splits and say so.
+  const nightsUsable = !routeIsImported && [1,2,3,4,5].every(d =>
+    selectedNights[d] && nearestTrackPoint(selectedNights[d].ll).km < 2.0);
+  window.__gpxEvenSplit = !nightsUsable;
+  if (nightsUsable) {
+    for(let d=1;d<=5;d++) splits.push(nearestTrackPoint(selectedNights[d].ll).idx);
+  } else {
+    const ri = routeIndex();
+    for(let d=1;d<=5;d++){
+      const target = ri.total * d / 6;
+      let bi = 0;
+      for(let i=0;i<TRACK.length;i++){ if(ri.cum[i] <= target) bi = i; else break; }
+      splits.push(bi);
+    }
+  }
 
-  // Truncate at Night 5 split — the east-going HRP section is not Day 6 to Luchon
-  TRACK.length = splits[5] + 1;
-  invalidateRouteIndex();
+  // Overnight stops can be chosen in any order, including one that sits behind
+  // an earlier night (Refugio de Es Plans at km 96.8 as Night 5, with Night 4
+  // at Viados km 97.7). Splits must be non-decreasing: otherwise truncating at
+  // splits[5] cuts below an earlier split and the day-tagging loop below runs
+  // off the end of TRACK and throws, killing the page from a normal click.
+  // Clamping turns it into a zero-length day, which updateDayCards() warns about.
+  for(let d=1;d<=5;d++) if(splits[d] < splits[d-1]) splits[d] = splits[d-1];
+
+  // Truncate at Night 5 split — the east-going HRP section is not Day 6 to
+  // Luchon. An imported route has no Luchon descent to make room for, so it
+  // keeps its full length and Day 6 is simply its last sixth.
+  if (!routeIsImported) {
+    TRACK.length = splits[5] + 1;
+    invalidateRouteIndex();
+  }
   splits.push(TRACK.length);
 
-  for(let d=1;d<=5;d++){const from=d===1?splits[0]:splits[d-1]+1;const to=splits[d]+1;for(let i=from;i<to;i++)TRACK[i][3]=d;}
+  const lastTagged = routeIsImported ? 6 : 5;
+  for(let d=1;d<=lastTagged;d++){const from=d===1?splits[0]:splits[d-1]+1;const to=Math.min(splits[d]+1,TRACK.length);for(let i=from;i<to;i++)TRACK[i][3]=d;}
   [1,2,3,4,5,6].forEach(d=>{
     const pts=TRACK.filter(p=>p[3]===d);
     dayLines[d].setLatLngs(pts.map(p=>[p[0],p[1]]));
     if(pts.length) dayBounds[d]=llBounds(pts);
   });
+  drawElevMini();
   const gen = ++routeGen;
   for(let d=1;d<=5;d++){
     if(selectedNights[d]){
@@ -1774,7 +1821,7 @@ function computeDaySplits(){
       approachLines[d].setLatLngs([]);
     }
   }
-  fetchLuchonDescent(gen);
+  if (!routeIsImported) fetchLuchonDescent(gen);
 }
 computeDaySplits();
 updateDayCards();
@@ -1788,6 +1835,7 @@ function applyDay6(path, gen, provisional) {
   invalidateRouteIndex();
   const d6 = TRACK.filter(p => p[3] === 6);
   dayLines[6].setLatLngs(d6.map(p => [p[0], p[1]]));
+  drawElevMini();
   dayLines[6].setStyle({ dashArray: provisional ? '7,6' : null });
   if (d6.length) dayBounds[6] = llBounds(d6);
   greyRoute.setLatLngs(TRACK.map(p => [p[0], p[1]]));
@@ -2169,7 +2217,19 @@ function elevProfile(pts, interval) {
 }
 
 function calcDayStats(day) {
-  const pts = TRACK.filter(p => p[3] === day);
+  // Index range, not a tag filter. Days are tagged contiguously (1:0-9, 2:10-19,
+  // ...), so filtering by tag drops the segment that bridges one day into the
+  // next and the six cards stop summing to the route total. On the dense HRP
+  // track that is ~85 m; on a coarse imported GPX it was 1.38 km of 16.3.
+  let lo = -1, hi = -1;
+  for (let i = 0; i < TRACK.length; i++){
+    if (TRACK[i][3] === day){ if (lo < 0) lo = i; hi = i; }
+  }
+  if (lo < 0) return { dist: 0, gain: 0, loss: 0, maxEle: 0 };
+  // reach one point into the following day so the joining segment is counted
+  // exactly once, by the day that walks it
+  const end = (hi + 1 < TRACK.length && TRACK[hi + 1][3] === day + 1) ? hi + 1 : hi;
+  const pts = TRACK.slice(lo, end + 1);
   let dist = 0, maxEle = pts.length ? pts[0][2] : 0;
   for (let i = 1; i < pts.length; i++) {
     dist += kmBetween(pts[i-1], pts[i]);
@@ -2243,25 +2303,48 @@ function handleGPXFile(file) {
   reader.onload = ev => {
     try {
       const xml = new DOMParser().parseFromString(ev.target.result, 'application/xml');
-      const trkpts = [...xml.querySelectorAll('trkpt')];
-      if (!trkpts.length) { status.textContent = '✗ No track points found'; return; }
-      TRACK.length = 0;
-      trkpts.forEach(pt => {
-        TRACK.push([
-          parseFloat(pt.getAttribute('lat')),
-          parseFloat(pt.getAttribute('lon')),
-          Math.round(parseFloat(pt.querySelector('ele')?.textContent || 0)),
-          1
-        ]);
+      // <trkpt> is a recorded track; <rtept> is a planned route. Plenty of
+      // sources (including GR10/GR11 downloads) hand you the latter.
+      let pts = [...xml.querySelectorAll('trkpt')];
+      let kind = 'track';
+      if (!pts.length) { pts = [...xml.querySelectorAll('rtept')]; kind = 'route'; }
+      if (!pts.length) { status.textContent = '✗ No track or route points found'; return; }
+
+      const loaded = [];
+      pts.forEach(pt => {
+        const la = parseFloat(pt.getAttribute('lat'));
+        const lo = parseFloat(pt.getAttribute('lon'));
+        if (!isFinite(la) || !isFinite(lo)) return;      // skip malformed points
+        const el = pt.querySelector('ele');
+        loaded.push([la, lo, Math.round(parseFloat(el ? el.textContent : 0) || 0), 1]);
       });
+      if (loaded.length < 2) { status.textContent = '✗ Need at least 2 valid points'; return; }
+
+      // TRACK_ORIG is the restore point computeDaySplits() rebuilds from every
+      // time. Writing only TRACK meant the import was wiped on the very next
+      // line while the status still said it had worked.
+      TRACK.length = 0;      loaded.forEach(p => TRACK.push([...p]));
+      TRACK_ORIG.length = 0; loaded.forEach(p => TRACK_ORIG.push([...p]));
+      routeIsImported = true;
+      invalidateRouteIndex();
+
       greyRoute.setLatLngs(TRACK.map(p => [p[0], p[1]]));
       computeDaySplits();
+      snapshotShelterWindows();
+      drawElevMain(activeDay);
+      drawElevMini();
       updateDayCards();
       if (typeof activeDay !== 'undefined' && activeDay) {
         updateSidebar(activeDay);
         drawElevMain(activeDay);
       }
-      status.textContent = `✓ ${trkpts.length.toLocaleString()} pts — distances recalculated`;
+      let km = 0;
+      for (let i = 1; i < TRACK.length; i++) km += kmBetween(TRACK[i-1], TRACK[i]);
+      status.textContent = '✓ ' + loaded.length.toLocaleString() + ' ' + kind
+        + ' pts · ' + km.toFixed(1) + ' km'
+        + (window.__gpxEvenSplit ? ' · split into 6 equal days' : '')
+        + (loaded.length < pts.length
+            ? ' · ' + (pts.length - loaded.length) + ' invalid points skipped' : '');
       status.style.color = '#50d080';
     } catch(e) { status.textContent = '✗ Parse error: ' + e.message; }
   };
