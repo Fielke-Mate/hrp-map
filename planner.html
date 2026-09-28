@@ -35,7 +35,12 @@ button:hover{background:#2a5f88}
 button.sec{background:#162a3d;border-color:#2a4060;color:#9ab8d0;font-weight:500}
 button:disabled{opacity:.4;cursor:default}
 #main{display:flex;height:calc(100vh - 168px);min-height:360px}
+#mapcol{flex:1;display:flex;flex-direction:column;min-width:0}
 #map{flex:1;background:#101f2e;position:relative}
+#elev{height:132px;border-top:1px solid #1e3247;background:#0c1a27;position:relative}
+#elev-svg{width:100%;height:100%;display:block}
+#elev .none{position:absolute;inset:0;display:flex;align-items:center;justify-content:center;
+  color:#5a7a90;font-size:11.5px}
 #side{width:340px;overflow-y:auto;border-left:1px solid #1e3247;background:#0b1a28}
 #summary{padding:10px 12px;border-bottom:1px solid #1e3247}
 #summary .big{font-size:19px;color:#fff;font-weight:600}
@@ -88,7 +93,10 @@ button:disabled{opacity:.4;cursor:default}
 </div>
 
 <div id="main">
-  <div id="map"><div id="legend"></div><div id="zoomhint"></div></div>
+  <div id="mapcol">
+    <div id="map"><div id="legend"></div><div id="zoomhint"></div></div>
+    <div id="elev"><svg id="elev-svg"></svg><div class="none" id="elev-none">Pick a start and finish to see the profile</div></div>
+  </div>
   <div id="side">
     <div id="summary"><div class="big">Loading…</div></div>
     <div id="msg"></div>
@@ -123,6 +131,9 @@ const ROUTE_META = {
   gr11: {name:'GR11', full:'GR 11 — Spanish side',       colour:'#e070c0', on:false}
 };
 const SHELTER_ZOOM = 10;      // below this the badges merge into a solid mass
+const DAY_COLOURS = ['#4a9fd0','#e05030','#e09020','#20a060','#9040d0','#d04090',
+                     '#40b0a0','#c0a020','#7060d0','#d06040'];
+const dayColour = i => DAY_COLOURS[i % DAY_COLOURS.length];
 
 const map = L.map('map', {zoomControl:true}).setView([42.75, 0.6], 8);
 L.tileLayer('https://{s}.tile.opentopomap.org/{z}/{x}/{y}.png', {
@@ -260,16 +271,33 @@ function pinIcon(colour){
     html:'<div class="pin" style="background:'+colour+'"></div>'});
 }
 
+let selLine = null;
 function drawRoutes(){
   Object.keys(ROUTE_META).forEach(id => {
     if (lines[id]){ map.removeLayer(lines[id]); delete lines[id]; }
     const meta = ROUTE_META[id];
     if (!meta.on || !R[id]) return;
     const isActive = id === active;
-    lines[id] = L.polyline(R[id].points.map(p => [p[0], p[1]]),
-      {color:meta.colour, weight:isActive ? 4 : 2.5, opacity:isActive ? 0.95 : 0.5}).addTo(map);
+    // With a range picked, the rest of the active route drops back so the
+    // chosen section reads as the subject rather than one stretch of 755 km.
+    const ranged = isActive && pick.start && pick.end;
+    lines[id] = L.polyline(R[id].points.map(p => [p[0], p[1]]), {
+      color: meta.colour,
+      weight: isActive ? (ranged ? 2 : 4) : 2.5,
+      opacity: isActive ? (ranged ? 0.3 : 0.95) : 0.45
+    }).addTo(map);
     lines[id].on('click', ev => onLineClick(id, [ev.latlng.lat, ev.latlng.lng]));
   });
+  if (selLine){ map.removeLayer(selLine); selLine = null; }
+  if (pick.start && pick.end && R[active]){
+    const rt = R[active];
+    const seg = rt.points.slice(idxAtKm(rt, pick.start.km), idxAtKm(rt, pick.end.km) + 1)
+                         .map(p => [p[0], p[1]]);
+    if (seg.length > 1){
+      selLine = L.polyline(seg, {color:ROUTE_META[active].colour, weight:5, opacity:1}).addTo(map);
+      selLine.on('click', ev => onLineClick(active, [ev.latlng.lat, ev.latlng.lng]));
+    }
+  }
 }
 
 function drawShelters(){
@@ -283,8 +311,13 @@ function drawShelters(){
   }
   const on = new Set(Object.keys(TYPES).filter(t => TYPES[t].on));
   const b = map.getBounds();
+  // Once a range is picked, only show what is inside it - everything else is
+  // noise for the trip being planned.
+  const lo = (pick.start && pick.end) ? pick.start.km - 1 : -Infinity;
+  const hi = (pick.start && pick.end) ? pick.end.km + 1 : Infinity;
   let n = 0;
   rt.shelters.forEach(s => {
+    if (s.km < lo || s.km > hi) return;
     if (!on.has(s.type) || !b.contains(L.latLng(s.ll[0], s.ll[1]))) return;
     n++;
     L.marker(s.ll, {icon:badge(s.type)})
@@ -299,7 +332,8 @@ function drawShelters(){
        + '<br><span style="color:#6a8398">' + esc(s.id) + '</span></p>')
      .addTo(layers.shelters);
   });
-  hint.textContent = n + ' places to sleep in view · ' + ROUTE_META[active].name;
+  hint.textContent = n + ' places to sleep in view · ' + ROUTE_META[active].name
+    + ((pick.start && pick.end) ? ' · within your section' : '');
 }
 
 function drawPins(){
@@ -342,11 +376,22 @@ function syncInputs(){
     + ' <span style="color:#6a8398">(' + (pick.end.km - pick.start.km).toFixed(0) + ' km)</span>';
 }
 
+function setActive(id){
+  if (!ROUTE_META[id].on || !R[id]) return;
+  active = id;
+  if (pick.start && pick.start.route !== id){ pick = {start:null, end:null}; PLAN = null; }
+  drawRoutes(); updateToggles(); drawShelters(); syncInputs(); drawPins(); render();
+}
+
 function updateToggles(){
   document.querySelectorAll('.rt').forEach(el => {
     const id = el.dataset.r;
-    el.classList.toggle('on', !!ROUTE_META[id].on);
-    el.style.borderColor = (id === active && ROUTE_META[id].on) ? ROUTE_META[id].colour : '#2a4060';
+    const on = !!ROUTE_META[id].on, isActive = id === active && on;
+    el.classList.toggle('on', on);
+    el.style.borderColor = isActive ? ROUTE_META[id].colour : '#2a4060';
+    el.style.boxShadow = isActive ? ('inset 0 -2px 0 ' + ROUTE_META[id].colour) : 'none';
+    el.title = ROUTE_META[id].full + (on ? (isActive ? ' — planning on this'
+      : ' — shown; click its line on the map to plan on it') : ' — hidden');
     const len = el.querySelector('.len');
     if (len) len.textContent = R[id] ? R[id].lengthKm.toFixed(0) + ' km' : '';
   });
@@ -367,12 +412,15 @@ function render(){
             + ' places to sleep within 2.5 km</div>' : '');
     msg.className = 'hint';
     msg.innerHTML = 'Click the route on the map to drop your <b>start</b>, then click again for '
-      + 'your <b>finish</b> — or type kilometres above. Toggle GR10, GR11 and HRP at the top to '
-      + 'compare them; clicking a line also makes it the one you are planning.';
+      + 'your <b>finish</b> — or type kilometres above. The toggles at the top show or hide each '
+      + 'route, so you can have all three up at once; clicking a line on the map is what chooses '
+      + 'the one you plan on.';
+    drawProfile();
     return;
   }
   if (!PLAN.ok){
     sum.innerHTML = '<div class="big">No plan possible</div>';
+    drawProfile();
     msg.className = 'err';
     const d = PLAN.day, why = PLAN.reasons, bits = [];
     if (why.indexOf('distance') >= 0)
@@ -405,6 +453,7 @@ function render(){
     const el = document.createElement('div');
     el.className = 'day';
     const t = d.to.type;
+    el.style.borderLeft = '3px solid ' + dayColour(i);
     el.innerHTML = '<div class="n">Day ' + (i+1) + '</div>'
       + '<div class="to">' + (t ? '<span class="tag" style="background:'+TYPES[t].bg
           +';color:'+TYPES[t].fg+'">'+t+'</span>' : '') + esc(d.to.label) + '</div>'
@@ -422,12 +471,85 @@ function render(){
     L.marker(s.ll || llAtKm(rt, s.km), {icon:badge(s.type), zIndexOffset:600})
      .bindPopup('<h4>Night ' + i + ' — ' + esc(s.label) + '</h4>').addTo(layers.stops);
   });
+  drawProfile();
   const low = PLAN.stops.filter(s => s.confidence && s.confidence !== 'high');
   if (low.length){
     msg.className = 'warn';
     msg.innerHTML = '⚠ ' + low.length + ' of your stops ' + (low.length===1?'is':'are')
       + ' classified from incomplete OSM tags: ' + low.map(s=>esc(s.label)).join(', ')
       + '. Treat the type as a best guess and check before relying on it.';
+  }
+}
+
+// Distance along the x axis, not point index, and one coloured band per day -
+// the same shape as the earlier HRP tool, which read well.
+function drawProfile(){
+  const svg = document.getElementById('elev-svg');
+  const none = document.getElementById('elev-none');
+  while (svg.firstChild) svg.removeChild(svg.firstChild);
+  if (!PLAN || !PLAN.ok || !R[active]){ none.style.display = 'flex'; return; }
+  none.style.display = 'none';
+  const rt = R[active];
+  const bb = svg.getBoundingClientRect();
+  const W = Math.max(320, bb.width || 900), H = Math.max(90, bb.height || 130);
+  svg.setAttribute('viewBox', '0 0 ' + W + ' ' + H);
+  const ns = 'http://www.w3.org/2000/svg';
+  const mk = (tag, at) => { const e = document.createElementNS(ns, tag);
+    Object.keys(at).forEach(k => e.setAttribute(k, at[k])); return e; };
+  const PL = 40, PR = 10, PT = 16, PB = 20;
+  const a = PLAN.stops[0].km, b = PLAN.stops[PLAN.stops.length-1].km;
+  const span = b - a;
+  const N = Math.max(200, Math.min(1400, Math.round(span * 6)));
+  const xs = [], es = [];
+  for (let i = 0; i <= N; i++){
+    const km = a + span * i / N;
+    xs.push(km); es.push(eleAtKm(rt, km));
+  }
+  let mn = Infinity, mx = -Infinity;
+  es.forEach(e => { if (e < mn) mn = e; if (e > mx) mx = e; });
+  if (mx - mn < 50) mx = mn + 50;
+  const sx = km => PL + (km - a) / span * (W - PL - PR);
+  const sy = e => H - PB - (e - mn) / (mx - mn) * (H - PT - PB);
+
+  // one filled band per day
+  PLAN.days.forEach((d, di) => {
+    let path = 'M' + sx(d.from.km) + ',' + (H - PB);
+    for (let i = 0; i <= N; i++){
+      if (xs[i] < d.from.km || xs[i] > d.to.km) continue;
+      path += ' L' + sx(xs[i]).toFixed(1) + ',' + sy(es[i]).toFixed(1);
+    }
+    path += ' L' + sx(d.to.km) + ',' + (H - PB) + ' Z';
+    svg.appendChild(mk('path', {d:path, fill:dayColour(di), opacity:0.72}));
+    // boundary tick and day number
+    svg.appendChild(mk('line', {x1:sx(d.to.km), y1:PT-4, x2:sx(d.to.km), y2:H-PB,
+      stroke:'#8aa4bc', 'stroke-width':0.7, 'stroke-dasharray':'2,3', opacity:0.6}));
+    const w = sx(d.to.km) - sx(d.from.km);
+    if (w > 26){
+      const t = mk('text', {x:(sx(d.from.km)+sx(d.to.km))/2, y:PT-4,
+        fill:'#cfe3f5', 'font-size':9.5, 'text-anchor':'middle'});
+      t.textContent = 'D' + (di+1);
+      svg.appendChild(t);
+    }
+  });
+  // outline
+  let ol = 'M' + sx(xs[0]) + ',' + sy(es[0]);
+  for (let i = 1; i <= N; i++) ol += ' L' + sx(xs[i]).toFixed(1) + ',' + sy(es[i]).toFixed(1);
+  svg.appendChild(mk('path', {d:ol, fill:'none', stroke:'#eaf4ff',
+    'stroke-width':1, opacity:0.55}));
+
+  // axes
+  [mn, (mn+mx)/2, mx].forEach(e => {
+    svg.appendChild(mk('line', {x1:PL, y1:sy(e), x2:W-PR, y2:sy(e),
+      stroke:'#2a4060', 'stroke-width':0.6, opacity:0.7}));
+    const t = mk('text', {x:PL-5, y:sy(e)+3, fill:'#7a9ab8', 'font-size':9, 'text-anchor':'end'});
+    t.textContent = Math.round(e) + 'm';
+    svg.appendChild(t);
+  });
+  const stepKm = span > 300 ? 50 : span > 120 ? 20 : span > 40 ? 10 : 5;
+  for (let km = Math.ceil(a/stepKm)*stepKm; km <= b; km += stepKm){
+    const t = mk('text', {x:sx(km), y:H-6, fill:'#7a9ab8', 'font-size':9, 'text-anchor':'middle'});
+    t.textContent = Math.round(km) + 'km';
+    svg.appendChild(t);
   }
 }
 
@@ -514,20 +636,25 @@ async function ensureRoute(id){
     b.className = 'rt'; b.dataset.r = id; b.title = m.full;
     b.innerHTML = '<span class="dot" style="background:' + m.colour + '"></span>'
       + m.name + '<span class="len"></span>';
+    // The toggle controls VISIBILITY only. Which route you are planning is a
+    // separate thing, set by clicking a line on the map - one button doing
+    // both jobs made showing all three feel like the routes excluded one
+    // another.
     b.onclick = async () => {
-      if (m.on && active !== id){ active = id; }      // first click focuses it
-      else if (m.on){                                  // already focused: hide it
-        const other = Object.keys(ROUTE_META).find(k => k !== id && ROUTE_META[k].on);
-        if (!other) return;                            // never hide the last one
-        m.on = false; active = other;
-      } else {
-        m.on = true; await ensureRoute(id); active = id;
-      }
-      if (pick.start && pick.start.route !== active){
-        pick = {start:null, end:null}; PLAN = null;
+      m.on = !m.on;
+      if (m.on) await ensureRoute(id);
+      if (!ROUTE_META[active].on){
+        const other = Object.keys(ROUTE_META).find(k => ROUTE_META[k].on);
+        if (other){
+          active = other;
+          if (pick.start && pick.start.route !== active){
+            pick = {start:null, end:null}; PLAN = null;
+          }
+        }
       }
       drawRoutes(); updateToggles(); drawShelters(); syncInputs(); drawPins(); render();
     };
+    b.oncontextmenu = e => { e.preventDefault(); if (ROUTE_META[id].on) setActive(id); };
     tg.appendChild(b);
   });
 
@@ -555,6 +682,7 @@ async function ensureRoute(id){
   ['startKm','endKm','minKm','maxKm','maxAsc'].forEach(id =>
     document.getElementById(id).onchange = replan);
   map.on('moveend', drawShelters);
+  window.addEventListener('resize', () => { drawProfile(); });
   window.__plannerReady = true;
 })();
 </script>
