@@ -9,7 +9,7 @@
 // the tiles with `Cache-Control: max-age=604800` and `Access-Control-Allow-Origin: *`,
 // so responses are CORS-readable (not opaque) and carry no storage-quota padding.
 
-const VERSION = 'v1';
+const VERSION = 'v2';
 const SHELL = 'hrp-shell-' + VERSION;
 const TILES = 'hrp-tiles';           // intentionally unversioned
 const TILE_HOST = /(^|\.)tile\.opentopomap\.org$/;
@@ -18,6 +18,9 @@ const TILE_MAX = 4000;               // hard ceiling, ~190 MB worst case
 const SHELL_URLS = [
   './',
   './index.html',
+  './planner.html',
+  './leaflet.js',
+  './leaflet.css',
   './manifest.webmanifest',
   './icon-192.png',
   './icon-512.png',

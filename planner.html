@@ -1,0 +1,439 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8"/>
+<meta name="viewport" content="width=device-width,initial-scale=1"/>
+<title>Pyrenees traverse planner — GR10 · GR11 · HRP</title>
+<link rel="stylesheet" href="./leaflet.css"/>
+<style>
+*{box-sizing:border-box;margin:0;padding:0}
+body{background:#0a1622;color:#d0e0f0;font:13px/1.5 system-ui,-apple-system,Segoe UI,sans-serif}
+#top{padding:10px 14px;border-bottom:1px solid #1e3247;background:#0d1c2b}
+h1{font-size:15px;color:#fff;font-weight:600;display:inline-block;margin-right:14px}
+#top .sub{color:#7a9ab8;font-size:11px}
+#controls{display:flex;flex-wrap:wrap;gap:14px;align-items:flex-end;padding:10px 14px;
+  border-bottom:1px solid #1e3247;background:#0e1e2e}
+.ctl{display:flex;flex-direction:column;gap:3px}
+.ctl label{font-size:10px;color:#7a9ab8;text-transform:uppercase;letter-spacing:.4px}
+select,input[type=number]{background:#0f2030;color:#d0e0f0;border:1px solid #2a4060;
+  border-radius:5px;padding:5px 7px;font:inherit;font-size:12px}
+input[type=number]{width:74px}
+.types{display:flex;gap:7px;flex-wrap:wrap}
+.types label{display:flex;align-items:center;gap:3px;font-size:11px;color:#bcd4e6;
+  text-transform:none;letter-spacing:0;cursor:pointer}
+button{background:#1e4a6b;color:#dff0ff;border:1px solid #3a7ca8;border-radius:6px;
+  padding:7px 13px;font:inherit;font-size:12px;font-weight:600;cursor:pointer}
+button:hover{background:#2a5f88}
+button.sec{background:#162a3d;border-color:#2a4060;color:#9ab8d0;font-weight:500}
+#main{display:flex;height:calc(100vh - 150px);min-height:380px}
+#map{flex:1;background:#101f2e}
+#side{width:340px;overflow-y:auto;border-left:1px solid #1e3247;background:#0b1a28}
+#summary{padding:10px 12px;border-bottom:1px solid #1e3247}
+#summary .big{font-size:19px;color:#fff;font-weight:600}
+#summary .row{color:#8aa4bc;font-size:11px;margin-top:2px}
+#msg{padding:10px 12px;font-size:11.5px;line-height:1.6}
+#msg.warn{background:#3a2410;border-bottom:1px solid #8a5a20;color:#ffcf90}
+#msg.err{background:#3a1616;border-bottom:1px solid #8a2020;color:#ffb0b0}
+.day{padding:9px 12px;border-bottom:1px solid #16293a}
+.day:hover{background:#102030}
+.day .n{font-size:10px;color:#7a9ab8;text-transform:uppercase;letter-spacing:.4px}
+.day .to{font-size:13px;color:#fff;font-weight:600;margin:1px 0}
+.day .st{color:#9ab8d0;font-size:11.5px}
+.day .tag{display:inline-block;border-radius:3px;padding:0 4px;font-size:9.5px;
+  font-weight:700;margin-right:4px;vertical-align:1px}
+.badge{border-radius:3px;width:19px;height:19px;line-height:17px;text-align:center;
+  font-size:11px;font-weight:700;border:2px solid}
+#legend{position:absolute;bottom:12px;left:12px;z-index:900;background:#12253ae6;
+  border:1px solid #2a4060;border-radius:7px;padding:7px 9px;font-size:10.5px}
+#legend div{display:flex;align-items:center;gap:6px;margin:2px 0}
+.leaflet-popup-content-wrapper{background:#1a2d3f;border:1px solid #2a4060;color:#d0e0f0}
+.leaflet-popup-tip{background:#1a2d3f}
+.leaflet-popup-content{font-size:12px;margin:9px 12px}
+.leaflet-popup-content h4{color:#7ad0f0;font-size:12.5px;margin-bottom:3px}
+.leaflet-popup-content .m{color:#9ab8d0;font-size:11px}
+</style>
+</head>
+<body>
+
+<div id="top">
+  <h1>Pyrenees traverse planner</h1>
+  <span class="sub">GR10 · GR11 · HRP — route and shelter data from OpenStreetMap</span>
+</div>
+
+<div id="controls">
+  <div class="ctl"><label for="route">Route</label>
+    <select id="route">
+      <option value="hrp">HRP — Haute Randonnée Pyrénéenne</option>
+      <option value="gr10">GR10 — French side</option>
+      <option value="gr11">GR11 — Spanish side</option>
+    </select></div>
+  <div class="ctl"><label for="startKm">Start (km)</label><input type="number" id="startKm" value="0" min="0" step="1"></div>
+  <div class="ctl"><label for="endKm">Finish (km)</label><input type="number" id="endKm" value="150" min="1" step="1"></div>
+  <div class="ctl"><label for="minKm">Day min</label><input type="number" id="minKm" value="10" min="1" step="1"></div>
+  <div class="ctl"><label for="maxKm">Day max</label><input type="number" id="maxKm" value="20" min="2" step="1"></div>
+  <div class="ctl"><label for="maxAsc">Max climb (m)</label><input type="number" id="maxAsc" value="1600" min="0" step="100"></div>
+  <div class="ctl"><label>Will sleep in</label>
+    <div class="types" id="types"></div></div>
+  <div class="ctl"><label>&nbsp;</label><button id="go">Plan it</button></div>
+  <div class="ctl"><label>&nbsp;</label><button id="gpx" class="sec">Export GPX</button></div>
+</div>
+
+<div id="main">
+  <div id="map"><div id="legend"></div></div>
+  <div id="side">
+    <div id="summary"><div class="big">Loading…</div></div>
+    <div id="msg"></div>
+    <div id="days"></div>
+  </div>
+</div>
+
+<script src="./leaflet.js"></script>
+<script>
+// ---------------------------------------------------------------------------
+// Pyrenees traverse planner.
+//
+// The model: a route is one continuous polyline and everything else is an
+// interval or a point measured in kilometres along it. Days are NOT stored -
+// they are derived from the chosen overnight stops, which is what lets the
+// same geometry serve any start, finish and daily range.
+// ---------------------------------------------------------------------------
+
+const TYPES = {
+  R: {label:'Staffed refuge',  bg:'#1a7a40', bd:'#80f0b0', fg:'#fff', on:true},
+  C: {label:'Unattended hut',  bg:'#b85e10', bd:'#ffd080', fg:'#fff', on:true},
+  A: {label:'Bare shelter',    bg:'#5a3060', bd:'#c080ff', fg:'#ddb0ff', on:true},
+  G: {label:'Gîte / albergue', bg:'#1c5c8a', bd:'#7ad0f0', fg:'#fff', on:true},
+  B: {label:'Campsite',        bg:'#4a6a20', bd:'#b0e060', fg:'#fff', on:true},
+  H: {label:'Hotel / guesthouse', bg:'#5a5a5a', bd:'#a0a0a0', fg:'#ddd', on:false}
+};
+// H is off by default: it adds almost nothing where it matters (GR10's worst
+// gap is 13.4 km with or without it) and clutters every village.
+
+const map = L.map('map', {zoomControl:true}).setView([42.7, 0.4], 8);
+L.tileLayer('https://{s}.tile.opentopomap.org/{z}/{x}/{y}.png', {
+  attribution:'Kartendaten: © OpenStreetMap-Mitwirkende, SRTM | Kartendarstellung: © OpenTopoMap (CC-BY-SA)',
+  crossOrigin:true, maxZoom:17, opacity:0.85
+}).addTo(map);
+
+let ROUTE = null;            // {id, points:[[lat,lon,ele]], cum:[km], lengthKm, stages}
+let SHELTERS = null;         // all of them, every route
+let onRoute = [];            // shelters projecting onto the current route, sorted by km
+let PLAN = null;
+const layers = { line:null, stops:L.layerGroup().addTo(map), shelters:L.layerGroup().addTo(map) };
+
+function kmBetween(a, b){
+  const dlat = (b[0]-a[0])*111.0;
+  const dlon = (b[1]-a[1])*111.0*Math.cos((a[0]+b[0])/2*Math.PI/180);
+  return Math.sqrt(dlat*dlat + dlon*dlon);
+}
+
+// Elevation resampled to a fixed interval before the threshold is applied, so
+// the figure does not change with how densely the track happens to be sampled.
+function ascentBetween(kmA, kmB){
+  const c = ROUTE.cum, p = ROUTE.points;
+  let i = idxAtKm(kmA), j = idxAtKm(kmB);
+  if (j <= i) return {up:0, dn:0};
+  const STEP = 0.025;
+  let up = 0, dn = 0, prev = eleAtKm(kmA);
+  for (let k = kmA + STEP; k <= kmB; k += STEP){
+    const e = eleAtKm(k);
+    const d = e - prev;
+    if (Math.abs(d) > 3){ if (d > 0) up += d; else dn -= d; prev = e; }
+  }
+  return {up:Math.round(up), dn:Math.round(dn)};
+}
+
+function idxAtKm(km){
+  const c = ROUTE.cum;
+  let lo = 0, hi = c.length - 1;
+  while (lo < hi){ const m = (lo+hi)>>1; if (c[m] < km) lo = m+1; else hi = m; }
+  return lo;
+}
+function eleAtKm(km){
+  const i = idxAtKm(km), p = ROUTE.points, c = ROUTE.cum;
+  if (i <= 0) return p[0][2];
+  const span = c[i] - c[i-1];
+  const t = span > 0 ? (km - c[i-1]) / span : 0;
+  return p[i-1][2] + t * (p[i][2] - p[i-1][2]);
+}
+function llAtKm(km){
+  const i = idxAtKm(km), p = ROUTE.points, c = ROUTE.cum;
+  if (i <= 0) return [p[0][0], p[0][1]];
+  const span = c[i] - c[i-1];
+  const t = span > 0 ? (km - c[i-1]) / span : 0;
+  return [p[i-1][0] + t*(p[i][0]-p[i-1][0]), p[i-1][1] + t*(p[i][1]-p[i-1][1])];
+}
+
+// --- the planner ----------------------------------------------------------
+// Candidate stops form a DAG ordered by km; an edge exists where the day
+// between them satisfies every constraint. The itinerary is the cheapest path.
+// Greedy "walk the target distance and take the nearest hut" is the obvious
+// alternative and it paints itself into corners - it will happily leave a
+// 26 km stretch with nothing in it for the final day.
+function autoPlan(startKm, endKm, opts){
+  const cand = onRoute.filter(s => s.km > startKm + 0.3 && s.km < endKm - 0.3
+                              && opts.types.has(s.type) && s.offM <= opts.maxOffM);
+  const nodes = [{km:startKm, offM:0, label:'Start', type:null}]
+    .concat(cand)
+    .concat([{km:endKm, offM:0, label:'Finish', type:null}]);
+  const N = nodes.length, INF = Infinity;
+  const cost = new Array(N).fill(INF), prev = new Array(N).fill(-1);
+  cost[0] = 0;
+
+  const dayOf = (a, b) => {
+    const trackKm = nodes[b].km - nodes[a].km;
+    const detour = (nodes[a].offM + nodes[b].offM) / 1000;
+    const asc = ascentBetween(nodes[a].km, nodes[b].km);
+    return {trackKm, detour, km: trackKm + detour, up: asc.up, dn: asc.dn};
+  };
+
+  for (let i = 0; i < N; i++){
+    if (cost[i] === INF) continue;
+    for (let j = i + 1; j < N; j++){
+      const d = dayOf(i, j);
+      if (d.trackKm > opts.maxKm) break;                 // sorted: no later j is shorter
+      if (d.km > opts.maxKm) continue;                   // detour pushed it over
+      if (d.km < opts.minKm && j < N - 1) continue;      // a short last day is fine
+      if (opts.maxAsc > 0 && d.up > opts.maxAsc) continue;
+      const ideal = (opts.minKm + opts.maxKm) / 2;
+      let c = Math.abs(d.km - ideal)
+            + (nodes[j].offM / 1000) * 2                 // detours cost real effort
+            + (opts.maxAsc > 0 ? Math.max(0, d.up - opts.maxAsc*0.85) / 120 : 0);
+      if (cost[i] + c < cost[j]){ cost[j] = cost[i] + c; prev[j] = i; }
+    }
+  }
+
+  if (cost[N-1] === INF){
+    // Explain precisely why, rather than silently stretching a day. The gap
+    // that matters is door to door - saying "11.9 km, beyond your 12 km max"
+    // reads as a contradiction when the detours are what push it over.
+    let far = 0;
+    for (let i = 0; i < N; i++) if (cost[i] < INF && nodes[i].km > nodes[far].km) far = i;
+    const from = nodes[far];
+    let best = null;
+    for (let j = far + 1; j < N; j++){
+      const d = dayOf(far, j);
+      const reasons = [];
+      if (d.km > opts.maxKm) reasons.push('distance');
+      if (opts.maxAsc > 0 && d.up > opts.maxAsc) reasons.push('climb');
+      if (!reasons.length) continue;            // reachable, so not the blocker
+      if (!best) best = {node:nodes[j], d:d, reasons:reasons};
+    }
+    if (!best){
+      const d = dayOf(far, N-1);
+      best = {node:nodes[N-1], d:d, reasons:['distance']};
+    }
+    return {ok:false, stuckAt:from, next:best.node, day:best.d, reasons:best.reasons};
+  }
+  const path = [];
+  for (let i = N-1; i >= 0; i = prev[i]){ path.unshift(nodes[i]); if (i === 0) break; }
+  const days = [];
+  for (let i = 1; i < path.length; i++){
+    const a = path[i-1], b = path[i];
+    const trackKm = b.km - a.km, detour = (a.offM + b.offM)/1000;
+    const asc = ascentBetween(a.km, b.km);
+    days.push({from:a, to:b, trackKm, detour, km:trackKm+detour,
+               up:asc.up, dn:asc.dn,
+               hours: (trackKm+detour)/4 + asc.up/600});
+  }
+  return {ok:true, stops:path, days:days};
+}
+
+// --- rendering ------------------------------------------------------------
+function badge(t){
+  const s = TYPES[t] || TYPES.A;
+  return L.divIcon({className:'', iconSize:[19,19], iconAnchor:[9.5,9.5],
+    html:'<div class="badge" style="background:'+s.bg+';border-color:'+s.bd+';color:'+s.fg+'">'+t+'</div>'});
+}
+
+function drawRoute(){
+  if (layers.line) map.removeLayer(layers.line);
+  layers.line = L.polyline(ROUTE.points.map(p => [p[0], p[1]]),
+                           {color:'#7ad0f0', weight:3, opacity:0.85}).addTo(map);
+  map.fitBounds(layers.line.getBounds(), {padding:[20,20]});
+}
+
+function drawShelters(){
+  layers.shelters.clearLayers();
+  const on = new Set(Object.keys(TYPES).filter(t => TYPES[t].on));
+  const a = +document.getElementById('startKm').value, b = +document.getElementById('endKm').value;
+  onRoute.filter(s => on.has(s.type) && s.km >= a - 2 && s.km <= b + 2).forEach(s => {
+    L.marker(s.ll, {icon:badge(s.type)})
+     .bindPopup('<h4>' + esc(s.label) + '</h4><p class="m">'
+       + (TYPES[s.type] ? TYPES[s.type].label : s.type)
+       + (s.ele ? ' · ' + s.ele + ' m' : '')
+       + '<br>km ' + s.km.toFixed(1) + ' · ' + s.offM + ' m off route'
+       + (s.capacity ? '<br>capacity ' + esc(s.capacity) : '')
+       + (s.confidence !== 'high' ? '<br><i>classification confidence: ' + s.confidence + '</i>' : '')
+       + '<br><span style="color:#6a8398">' + esc(s.id) + '</span></p>')
+     .addTo(layers.shelters);
+  });
+}
+
+function esc(t){ return String(t == null ? '' : t)
+  .replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;'); }
+
+function render(){
+  const sum = document.getElementById('summary'), msg = document.getElementById('msg'),
+        list = document.getElementById('days');
+  layers.stops.clearLayers();
+  list.innerHTML = ''; msg.className = ''; msg.innerHTML = '';
+
+  if (!PLAN){ sum.innerHTML = '<div class="big">—</div>'; return; }
+  if (!PLAN.ok){
+    sum.innerHTML = '<div class="big">No plan possible</div>';
+    msg.className = 'err';
+    const d = PLAN.day, why = PLAN.reasons;
+    const bits = [];
+    if (why.indexOf('distance') >= 0)
+      bits.push('<b>' + d.km.toFixed(1) + ' km</b> door to door'
+        + (d.detour > 0.05 ? ' (' + d.trackKm.toFixed(1) + ' km on the route plus '
+            + (d.detour*1000).toFixed(0) + ' m of detours)' : '')
+        + ', above your ' + document.getElementById('maxKm').value + ' km maximum');
+    if (why.indexOf('climb') >= 0)
+      bits.push('<b>' + d.up + ' m</b> of climb, above your '
+        + document.getElementById('maxAsc').value + ' m limit');
+    msg.innerHTML = 'Stuck after <b>' + esc(PLAN.stuckAt.label) + '</b> (km '
+      + PLAN.stuckAt.km.toFixed(1) + '). The next place you could sleep is <b>'
+      + esc(PLAN.next.label) + '</b> at km ' + PLAN.next.km.toFixed(1) + ' &mdash; '
+      + bits.join(', and ') + '.<br>'
+      + 'Try: '
+      + [].concat(
+          why.indexOf('distance') >= 0 ? ['raise the daily maximum past ' + Math.ceil(d.km) + ' km'] : [],
+          why.indexOf('climb') >= 0 ? ['raise the climb limit past ' + d.up + ' m'] : [],
+          ['allow more shelter types', 'or plan a bivouac there']
+        ).join(', ') + '.';
+    return;
+  }
+  const tot = PLAN.days.reduce((a,d) => a + d.km, 0);
+  const up = PLAN.days.reduce((a,d) => a + d.up, 0);
+  sum.innerHTML = '<div class="big">' + PLAN.days.length + ' days · ' + tot.toFixed(0) + ' km</div>'
+    + '<div class="row">↑ ' + up.toLocaleString() + ' m · '
+    + PLAN.days.reduce((a,d)=>a+d.hours,0).toFixed(0) + ' h walking (Naismith)</div>'
+    + '<div class="row">' + ROUTE.name + '</div>';
+
+  PLAN.days.forEach((d, i) => {
+    const el = document.createElement('div');
+    el.className = 'day';
+    const t = d.to.type;
+    el.innerHTML = '<div class="n">Day ' + (i+1) + '</div>'
+      + '<div class="to">' + (t ? '<span class="tag" style="background:'+TYPES[t].bg
+          +';color:'+TYPES[t].fg+'">'+t+'</span>' : '') + esc(d.to.label) + '</div>'
+      + '<div class="st">' + d.km.toFixed(1) + ' km · ↑' + d.up + ' m · ↓' + d.dn + ' m · ~'
+      + d.hours.toFixed(1) + ' h'
+      + (d.detour > 0.05 ? '<br><span style="color:#ffcf90">includes ' + (d.detour*1000).toFixed(0)
+          + ' m off route</span>' : '')
+      + (d.to.ele ? '<br>' + d.to.ele + ' m · km ' + d.to.km.toFixed(1) : '') + '</div>';
+    el.onclick = () => map.fitBounds(L.latLngBounds(llAtKm(d.from.km), llAtKm(d.to.km)), {padding:[40,40]});
+    list.appendChild(el);
+  });
+
+  PLAN.stops.forEach((s, i) => {
+    if (!s.type) return;
+    L.marker(s.ll || llAtKm(s.km), {icon:badge(s.type), zIndexOffset:500})
+     .bindPopup('<h4>Night ' + i + ' — ' + esc(s.label) + '</h4>')
+     .addTo(layers.stops);
+  });
+  const low = PLAN.stops.filter(s => s.confidence && s.confidence !== 'high');
+  if (low.length){
+    msg.className = 'warn';
+    msg.innerHTML = '⚠ ' + low.length + ' of your stops ' + (low.length===1?'is':'are')
+      + ' classified from incomplete OSM tags: ' + low.map(s=>esc(s.label)).join(', ')
+      + '. Treat the type as a best guess and check before relying on it.';
+  }
+}
+
+function replan(){
+  const types = new Set(Object.keys(TYPES).filter(t => TYPES[t].on));
+  const a = Math.max(0, +document.getElementById('startKm').value);
+  const b = Math.min(ROUTE.lengthKm, +document.getElementById('endKm').value);
+  if (b <= a){ PLAN = null; render(); return; }
+  PLAN = autoPlan(a, b, {
+    types, maxOffM: 2500,
+    minKm: +document.getElementById('minKm').value,
+    maxKm: +document.getElementById('maxKm').value,
+    maxAsc: +document.getElementById('maxAsc').value
+  });
+  drawShelters();
+  render();
+}
+
+// --- GPX ------------------------------------------------------------------
+function exportGPX(){
+  if (!PLAN || !PLAN.ok) return;
+  const a = PLAN.stops[0].km, b = PLAN.stops[PLAN.stops.length-1].km;
+  const i0 = idxAtKm(a), i1 = idxAtKm(b);
+  const pts = ROUTE.points.slice(i0, i1+1);
+  const out = ['<?xml version="1.0" encoding="UTF-8"?>',
+    '<gpx version="1.1" creator="Pyrenees traverse planner" xmlns="http://www.topografix.com/GPX/1/1">',
+    '  <metadata><name>' + esc(ROUTE.name) + ' km ' + a.toFixed(0) + '–' + b.toFixed(0)
+      + '</name><time>' + new Date().toISOString().replace(/\.\d+Z$/,'Z') + '</time></metadata>'];
+  PLAN.stops.forEach((s, i) => {
+    if (!s.type) return;
+    const ll = s.ll || llAtKm(s.km);
+    out.push('  <wpt lat="' + ll[0].toFixed(6) + '" lon="' + ll[1].toFixed(6) + '">'
+      + (s.ele ? '<ele>' + s.ele + '</ele>' : '')
+      + '<name>' + esc('Night ' + i + ' – ' + s.label) + '</name><sym>Lodging</sym></wpt>');
+  });
+  out.push('  <trk><name>' + esc(ROUTE.name) + '</name><trkseg>');
+  pts.forEach(p => out.push('    <trkpt lat="' + p[0].toFixed(6) + '" lon="' + p[1].toFixed(6)
+    + '"><ele>' + p[2] + '</ele></trkpt>'));
+  out.push('    </trkseg>\n  </trk>\n</gpx>');
+  const blob = new Blob([out.join('\n')], {type:'application/gpx+xml'});
+  const url = URL.createObjectURL(blob);
+  const el = document.createElement('a');
+  el.href = url; el.download = ROUTE.id + '-km' + a.toFixed(0) + '-' + b.toFixed(0) + '.gpx';
+  document.body.appendChild(el); el.click(); document.body.removeChild(el);
+  setTimeout(() => URL.revokeObjectURL(url), 4000);
+}
+
+// --- load -----------------------------------------------------------------
+async function loadRoute(id){
+  document.getElementById('summary').innerHTML = '<div class="big">Loading ' + id.toUpperCase() + '…</div>';
+  const r = await fetch('./data/routes/' + id + '.json').then(x => x.json());
+  const cum = [0];
+  for (let i = 1; i < r.points.length; i++) cum.push(cum[i-1] + kmBetween(r.points[i-1], r.points[i]));
+  ROUTE = {id:r.id, name:r.name, points:r.points, cum, lengthKm:cum[cum.length-1], stages:r.stages};
+  onRoute = [];
+  SHELTERS.forEach(s => {
+    const o = s.on.find(o => o.route === id);
+    if (o) onRoute.push({id:s.id, label:s.label, type:s.type, ele:s.ele,
+                         capacity:s.capacity, confidence:s.confidence,
+                         ll:s.ll, km:o.km, offM:o.offM});
+  });
+  onRoute.sort((a,b) => a.km - b.km);
+  document.getElementById('endKm').max = Math.floor(ROUTE.lengthKm);
+  document.getElementById('startKm').max = Math.floor(ROUTE.lengthKm);
+  drawRoute();
+  replan();
+}
+
+(async function init(){
+  const tbox = document.getElementById('types');
+  Object.keys(TYPES).forEach(t => {
+    const l = document.createElement('label');
+    l.innerHTML = '<input type="checkbox" data-t="' + t + '"' + (TYPES[t].on ? ' checked' : '')
+      + '> <span class="badge" style="display:inline-block;background:' + TYPES[t].bg
+      + ';border-color:' + TYPES[t].bd + ';color:' + TYPES[t].fg + '">' + t + '</span>';
+    l.title = TYPES[t].label;
+    tbox.appendChild(l);
+  });
+  document.getElementById('legend').innerHTML = Object.keys(TYPES).map(t =>
+    '<div><span class="badge" style="background:' + TYPES[t].bg + ';border-color:' + TYPES[t].bd
+    + ';color:' + TYPES[t].fg + '">' + t + '</span> ' + TYPES[t].label + '</div>').join('');
+
+  const sh = await fetch('./data/shelters.json').then(x => x.json());
+  SHELTERS = sh.shelters;
+  await loadRoute('hrp');
+
+  document.getElementById('route').onchange = e => loadRoute(e.target.value);
+  document.getElementById('go').onclick = replan;
+  document.getElementById('gpx').onclick = exportGPX;
+  tbox.onchange = e => { TYPES[e.target.dataset.t].on = e.target.checked; replan(); };
+  ['startKm','endKm','minKm','maxKm','maxAsc'].forEach(id =>
+    document.getElementById(id).onchange = replan);
+  window.__plannerReady = true;
+})();
+</script>
+</body>
+</html>

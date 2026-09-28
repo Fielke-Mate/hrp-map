@@ -131,10 +131,12 @@ unnamed = 0
 for r in merged:
     if not r['name']:
         unnamed += 1
-        near = r['on'][0]
+        # No route reference in the label: a shelter can serve several routes,
+        # and naming one of them means a stop on the HRP can read "GR10 km 10".
+        # The planner shows km on the route actually being planned.
         r['name'] = None
-        r['label'] = 'Unnamed %s · %s km %.0f%s' % (
-            TYPE_WORD.get(r['type'], 'shelter'), near['route'].upper(), near['km'],
+        r['label'] = 'Unnamed %s%s' % (
+            TYPE_WORD.get(r['type'], 'shelter'),
             (' · %d m' % r['ele']) if r['ele'] else '')
     else:
         r['label'] = r['name']
