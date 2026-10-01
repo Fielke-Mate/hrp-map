@@ -15,14 +15,20 @@ Guards against the mistakes this project has actually made:
     cannot see because it is a runtime error, not a syntax one
   * a popup disagreeing with the shelter it belongs to, which is how a
     renamed hut kept announcing its old name on the map
+  * an inline onclick= naming a function that no longer exists, which fails
+    silently: the button renders, the click throws into the void
+
+planner.html is not generated, but it is linted here so the same guards cover
+the tool that is now doing the planning.
 """
-import re, os, sys, glob
+import re, os, sys, glob, subprocess, tempfile
 
 SP = os.path.dirname(os.path.abspath(__file__))
 ROOT = os.path.dirname(SP)
 CHECK = '--check' in sys.argv
 SRC = os.path.join(SP, 'hrp_wallon_luchon.html')
 OUT = os.path.join(ROOT, 'index.html')
+PLANNER = os.path.join(ROOT, 'planner.html')
 
 
 def die(msg):
@@ -115,7 +121,12 @@ def tdz_lint(text):
         c = re.match(r'([A-Za-z_$][\w$]*)\(.*\);\s*(?://.*)?$', ln)
         if c and c.group(1) not in KEYWORDS and c.group(1) in funcs:
             entries.append((c.group(1) + '()', i, reachable(c.group(1))))
-        if re.match(r'\(function\s*\(', ln) or re.match(r'\(\s*\(\)\s*=>', ln):
+        # Must cover every shape a top-level IIFE takes, or the lint simply
+        # finds no entry point and reports nothing however broken the file
+        # is: planner.html opens with `(async function init(){`, which an
+        # earlier `\(function\s*\(` matched not at all.
+        if (re.match(r'\(\s*(?:async\s+)?function\b', ln)
+                or re.match(r'\(\s*(?:async\s*)?\([^)]*\)\s*=>', ln)):
             end = body_end(i)
             reached = set()
             for k in range(i, end + 1):
@@ -123,6 +134,10 @@ def tdz_lint(text):
                     if f in funcs:
                         reached |= reachable(f)
             entries.append(('top-level IIFE', i, reached))
+
+    if not entries:
+        return ['no load-time entry point found (no bare call at column 0 and '
+                'no top-level IIFE) - the lint cannot see anything in this file']
 
     problems = []
     for name, dline in sorted(decls.items(), key=lambda kv: kv[1]):
@@ -265,6 +280,72 @@ src = src[:idx] + off + src[idx:]
 if '__hrpReady' not in src:
     die('the __hrpReady startup sentinel is missing - tests rely on it to tell '
         '"the script ran" from "the script threw but hoisted functions still exist"')
+
+# --- guard 4: lint planner.html the same way ------------------------------
+# planner.html has no build step, so nothing was checking it. The locked-stop
+# work added inline onclick= handlers in popup HTML, which is a new way for a
+# rename to break a button without any error at build time.
+def handler_lint(text):
+    """Inline on*= handlers must name a function declared in the script.
+
+    These live inside JS string literals that build popup HTML, so a rename
+    breaks them without an error anywhere: the button still renders and the
+    click throws into the void. The first version of this lint looked only at
+    onclick= and so missed setLockNight, which is wired to onchange - hence
+    any on*= attribute, and a hard failure if it finds none at all.
+    """
+    m = re.findall(r'<script>(.*?)</script>', text, re.S)
+    if not m:
+        return ['no inline script block found']
+    code = m[-1]
+    declared = set(re.findall(r'^function\s+([A-Za-z_$][\w$]*)\s*\(', code, re.M))
+    declared |= set(re.findall(r'^(?:const|let|var)\s+([A-Za-z_$][\w$]*)\s*=\s*'
+                               r'(?:async\s*)?(?:function|\()', code, re.M))
+    BUILTIN = {'event', 'alert', 'confirm'}
+    found, out = 0, []
+    # [^"]* cannot cross a quote, so this stops at the attribute's own closing
+    # quote even where the JS string holding it is split across lines.
+    for attr, call in re.findall(r'\b(on[a-z]{3,})="([^"]*)"', code):
+        found += 1
+        for fn in re.findall(r'\b([A-Za-z_$][\w$]*)\s*\(', call):
+            if fn in BUILTIN or fn in declared or ('.' + fn) in call:
+                continue
+            out.append('%s= calls %s(), which is not declared at the top level: %s'
+                       % (attr, fn, ' '.join(call.split())[:70]))
+    if not found:
+        out.append('no inline on*= handlers found at all - the lint is not '
+                   'looking where the handlers are')
+    return out
+
+
+if os.path.exists(PLANNER):
+    ptext = open(PLANNER, encoding='utf-8').read()
+    tmp = None
+    probs = tdz_lint(ptext)
+    if probs:
+        die('planner.html temporal dead zone:\n'
+            + '\n'.join('   ' + p for p in probs))
+    probs = handler_lint(ptext)
+    if probs:
+        die('planner.html inline handlers:\n' + '\n'.join('   ' + p for p in probs))
+    # syntax-check the inline script if node is around
+    blocks = re.findall(r'<script>(.*?)</script>', ptext, re.S)
+    try:
+        fd, tmp = tempfile.mkstemp(suffix='.js')
+        os.close(fd)
+        open(tmp, 'w', encoding='utf-8').write(blocks[-1])
+        r = subprocess.run(['node', '--check', tmp], capture_output=True, text=True)
+        if r.returncode != 0:
+            die('planner.html inline script does not parse:\n   '
+                + (r.stderr or r.stdout).strip().replace('\n', '\n   '))
+        print('planner.html  guards passed: no TDZ, handlers resolve, script parses')
+    except FileNotFoundError:
+        print('planner.html  guards passed: no TDZ, handlers resolve (node absent, '
+              'parse not checked)')
+    finally:
+        if tmp and os.path.exists(tmp):
+            os.remove(tmp)
+
 
 # --- write, or check ------------------------------------------------------
 if CHECK:

@@ -69,6 +69,24 @@ button:disabled{opacity:.4;cursor:default}
 .leaflet-popup-content{font-size:12px;margin:9px 12px}
 .leaflet-popup-content h4{color:#7ad0f0;font-size:12.5px;margin-bottom:3px}
 .leaflet-popup-content .m{color:#9ab8d0;font-size:11px}
+#locks{border-bottom:1px solid #16293a;padding:7px 10px;background:#0e1f2e}
+#locks .lh{font-size:10px;color:#7a9ab8;text-transform:uppercase;letter-spacing:.4px;
+  display:flex;justify-content:space-between;align-items:center;margin-bottom:4px}
+#locks .lk{font-size:11.5px;color:#d0e0f0;display:flex;align-items:center;gap:6px;
+  padding:2px 0;flex-wrap:wrap}
+#locks .lk.out{opacity:.55}
+#locks .km{color:#6a8398;font-size:10.5px}
+#locks .ow{color:#ffcf90;font-size:10.5px}
+#locks select{background:#15283a;color:#d0e0f0;border:1px solid #2a4060;border-radius:4px;
+  font:inherit;font-size:11px;padding:1px 3px}
+.lx{background:none;border:1px solid #2a4060;color:#9ab8d0;border-radius:4px;
+  font:inherit;font-size:10px;padding:0 5px;cursor:pointer;line-height:15px}
+.lx:hover{color:#fff;border-color:#4a9fd0}
+.lk-b{background:#15283a;border:1px solid #2a4060;color:#9ab8d0;border-radius:4px;
+  font:inherit;font-size:10px;padding:1px 6px;cursor:pointer;margin-top:4px}
+.lk-b.on{background:#2a4a20;border-color:#50a040;color:#b0e0a0}
+.lk-b:hover{border-color:#4a9fd0}
+.badge.locked{box-shadow:0 0 0 2px #ffd060,0 0 5px #000a}
 </style>
 </head>
 <body>
@@ -100,6 +118,7 @@ button:disabled{opacity:.4;cursor:default}
   <div id="side">
     <div id="summary"><div class="big">Loading…</div></div>
     <div id="msg"></div>
+    <div id="locks"></div>
     <div id="days"></div>
   </div>
 </div>
@@ -146,6 +165,7 @@ let SHELTERS = null;
 let active = 'hrp';                    // the route being planned
 let pick = {start:null, end:null};     // {route, km}
 let PLAN = null;
+let LOCKS = [];                        // {route, id, km, label, type, night|null}
 const lines = {};
 const layers = {shelters:L.layerGroup().addTo(map), stops:L.layerGroup().addTo(map),
                 pins:L.layerGroup().addTo(map)};
@@ -205,50 +225,144 @@ function nearestKmOn(rt, ll){
 // between them satisfies every constraint; the itinerary is the cheapest
 // path. Greedy "walk the target distance, take the nearest hut" paints itself
 // into corners and leaves an impossible final day.
+//
+// Locked stops add two constraints. Every lock is *required*: no edge may step
+// over it, which forces all paths through it. A lock may further be *pinned*
+// to a night number, and that needs the night count as a second state
+// dimension - "the cheapest way to reach this hut" and "the cheapest way to
+// reach it on night 3" are different questions with different answers. The
+// dimension is only allocated when something is actually pinned, so an
+// unpinned plan costs exactly what it did before.
 function autoPlan(rt, startKm, endKm, opts){
+  const allLocks = opts.locks || [];
+  const locks = allLocks.filter(l => l.km > startKm + 0.3 && l.km < endKm - 0.3);
+  const lockIds = new Set(locks.map(l => l.id));
+  // A locked stop is honoured even if its type is switched off or it lies
+  // beyond the detour limit: the user asked for it by name.
   const cand = rt.shelters.filter(s => s.km > startKm + 0.3 && s.km < endKm - 0.3
-                                  && opts.types.has(s.type) && s.offM <= opts.maxOffM);
+                                  && ((opts.types.has(s.type) && s.offM <= opts.maxOffM)
+                                      || lockIds.has(s.id)));
   const nodes = [{km:startKm, offM:0, label:'Start', type:null}]
     .concat(cand).concat([{km:endKm, offM:0, label:'Finish', type:null}]);
   const N = nodes.length, INF = Infinity;
-  const cost = new Array(N).fill(INF), prev = new Array(N).fill(-1);
-  cost[0] = 0;
+
+  const required = new Uint8Array(N);
+  const pinnedAt = new Int16Array(N).fill(-1);
+  locks.forEach(l => {
+    const i = nodes.findIndex(n => n.id === l.id);
+    if (i < 0) return;
+    required[i] = 1;
+    if (l.night != null) pinnedAt[i] = l.night;
+  });
+  // The next required node strictly after i, so an edge that steps over a
+  // lock can be rejected outright rather than priced.
+  const nextReq = new Int32Array(N).fill(N);
+  for (let i = N - 2; i >= 0; i--) nextReq[i] = required[i+1] ? i+1 : nextReq[i+1];
+
   const dayOf = (a, b) => {
     const trackKm = nodes[b].km - nodes[a].km;
     const detour = (nodes[a].offM + nodes[b].offM) / 1000;
     const asc = ascentBetween(rt, nodes[a].km, nodes[b].km);
     return {trackKm, detour, km:trackKm + detour, up:asc.up, dn:asc.dn};
   };
-  for (let i = 0; i < N; i++){
-    if (cost[i] === INF) continue;
-    for (let j = i + 1; j < N; j++){
-      const d = dayOf(i, j);
-      if (d.trackKm > opts.maxKm) break;
-      if (d.km > opts.maxKm) continue;
-      if (d.km < opts.minKm && j < N - 1) continue;
-      if (opts.maxAsc > 0 && d.up > opts.maxAsc) continue;
-      const ideal = (opts.minKm + opts.maxKm) / 2;
-      const c = Math.abs(d.km - ideal) + (nodes[j].offM / 1000) * 2
-              + (opts.maxAsc > 0 ? Math.max(0, d.up - opts.maxAsc*0.85) / 120 : 0);
-      if (cost[i] + c < cost[j]){ cost[j] = cost[i] + c; prev[j] = i; }
+  const ideal = (opts.minKm + opts.maxKm) / 2;
+
+  // useDim  carry the night count as state (needed to honour a pin at all)
+  // applyPins  enforce the pins; off for the diagnosis pass, which answers
+  //            "which nights could this hut fall on?"
+  function solve(useDim, applyPins){
+    const D = useDim ? Math.min(N, Math.ceil((endKm - startKm) / Math.max(1, opts.minKm))
+                                   + locks.length + 2) : 1;
+    const cost = new Float64Array(N * D).fill(INF);
+    const prev = new Int32Array(N * D).fill(-1);
+    cost[0] = 0;
+    // The outer loop is in km order, which is topological order for this DAG,
+    // so every predecessor of i is final by the time i is reached.
+    for (let i = 0; i < N; i++){
+      let live = false;
+      for (let d = 0; d < D; d++) if (cost[i*D + d] < INF){ live = true; break; }
+      if (!live) continue;
+      // Edges out of i depend only on geometry, never on the night number, so
+      // they are built once and reused across the night dimension. Computing
+      // them inside the night loop instead re-walks the elevation profile D
+      // times per edge, which took a whole-route pinned plan from 0.2 s to 42 s.
+      const stop = Math.min(N, nextReq[i] + 1);
+      const ej = [], ec = [];
+      for (let j = i + 1; j < stop; j++){
+        const d = dayOf(i, j);
+        if (d.trackKm > opts.maxKm) break;
+        if (d.km > opts.maxKm) continue;
+        // A lock may make a short day - it was asked for by name.
+        if (d.km < opts.minKm && j < N - 1 && !required[i] && !required[j]) continue;
+        if (opts.maxAsc > 0 && d.up > opts.maxAsc) continue;
+        ej.push(j);
+        ec.push(Math.abs(d.km - ideal) + (nodes[j].offM / 1000) * 2
+                + (opts.maxAsc > 0 ? Math.max(0, d.up - opts.maxAsc*0.85) / 120 : 0));
+      }
+      for (let di = 0; di < D; di++){
+        const ci = cost[i*D + di];
+        if (ci === INF) continue;
+        const dj = useDim ? di + 1 : 0;
+        if (dj >= D) continue;
+        for (let e = 0; e < ej.length; e++){
+          const j = ej[e];
+          if (applyPins && pinnedAt[j] >= 0 && pinnedAt[j] !== dj) continue;
+          const t = j*D + dj;
+          if (ci + ec[e] < cost[t]){ cost[t] = ci + ec[e]; prev[t] = i*D + di; }
+        }
+      }
     }
+    let end = -1;
+    for (let d = 0; d < D; d++){
+      const s = (N-1)*D + d;
+      if (cost[s] < INF && (end < 0 || cost[s] < cost[end])) end = s;
+    }
+    return {D:D, cost:cost, prev:prev, end:end};
   }
-  if (cost[N-1] === INF){
+
+  const anyPin = locks.some(l => l.night != null);
+  const res = solve(anyPin, anyPin);
+
+  if (res.end < 0){
+    // Diagnose without the pins, so the report blames the geography when the
+    // geography is at fault and the pin when the pin is.
+    const diag = anyPin ? solve(true, false) : res;
+    const reach = i => {
+      const out = [];
+      for (let d = 0; d < diag.D; d++) if (diag.cost[i*diag.D + d] < INF) out.push(d);
+      return out;
+    };
+    if (anyPin){
+      for (let i = 0; i < N; i++){
+        if (pinnedAt[i] < 0) continue;
+        const ok = reach(i);
+        if (ok.length && ok.indexOf(pinnedAt[i]) < 0)
+          return {ok:false, kind:'pin', node:nodes[i], want:pinnedAt[i], nights:ok};
+      }
+    }
     let far = 0;
-    for (let i = 0; i < N; i++) if (cost[i] < INF && nodes[i].km > nodes[far].km) far = i;
+    for (let i = 0; i < N; i++)
+      if (reach(i).length && nodes[i].km > nodes[far].km) far = i;
     let best = null;
-    for (let j = far + 1; j < N; j++){
+    for (let j = far + 1; j < N && !best; j++){
       const d = dayOf(far, j), reasons = [];
       if (d.km > opts.maxKm) reasons.push('distance');
       if (opts.maxAsc > 0 && d.up > opts.maxAsc) reasons.push('climb');
-      if (!reasons.length) continue;
-      if (!best) best = {node:nodes[j], d:d, reasons:reasons};
+      if (reasons.length) best = {node:nodes[j], d:d, reasons:reasons};
     }
     if (!best) best = {node:nodes[N-1], d:dayOf(far, N-1), reasons:['distance']};
-    return {ok:false, stuckAt:nodes[far], next:best.node, day:best.d, reasons:best.reasons};
+    return {ok:false, kind:'gap', stuckAt:nodes[far], next:best.node, day:best.d,
+            reasons:best.reasons,
+            lock:(nextReq[far] < N && nextReq[far] <= nodes.indexOf(best.node))
+                 ? nodes[nextReq[far]] : null};
   }
+
   const path = [];
-  for (let i = N-1; i >= 0; i = prev[i]){ path.unshift(nodes[i]); if (i === 0) break; }
+  for (let s = res.end; s >= 0; s = res.prev[s]){
+    const i = Math.floor(s / res.D);
+    path.unshift(nodes[i]);
+    if (i === 0) break;
+  }
   const days = [];
   for (let i = 1; i < path.length; i++){
     const a = path[i-1], b = path[i];
@@ -257,14 +371,69 @@ function autoPlan(rt, startKm, endKm, opts){
     days.push({from:a, to:b, trackKm, detour, km:trackKm+detour, up:asc.up, dn:asc.dn,
                hours:(trackKm+detour)/4 + asc.up/600});
   }
-  return {ok:true, stops:path, days:days};
+  return {ok:true, stops:path, days:days,
+          ignored:allLocks.filter(l => !lockIds.has(l.id))};
+}
+
+// --- locked stops ---------------------------------------------------------
+// A lock survives every change to the daily range, the shelter types and the
+// section, because the whole point is "re-plan around this".
+function lockOf(id){ return LOCKS.find(l => l.id === id && l.route === active); }
+function toggleLock(id, night){
+  const i = LOCKS.findIndex(l => l.id === id && l.route === active);
+  if (i >= 0) LOCKS.splice(i, 1);
+  else {
+    const s = (R[active] || {shelters:[]}).shelters.find(x => x.id === id);
+    if (!s) return;
+    LOCKS.push({route:active, id:id, km:s.km, label:s.label, type:s.type,
+                night:(night == null ? null : +night)});
+  }
+  map.closePopup();
+  replan(); drawShelters();
+}
+function setLockNight(id, v){
+  const l = lockOf(id);
+  if (!l) return;
+  l.night = (v === '' ? null : +v);
+  replan();
+}
+function clearLocks(){
+  LOCKS = LOCKS.filter(l => l.route !== active);
+  replan(); drawShelters();
+}
+
+function drawLocks(){
+  const box = document.getElementById('locks');
+  const mine = LOCKS.filter(l => l.route === active).sort((a,b) => a.km - b.km);
+  if (!mine.length){ box.innerHTML = ''; box.style.display = 'none'; return; }
+  box.style.display = '';
+  const lo = pick.start ? pick.start.km : -Infinity;
+  const hi = pick.end ? pick.end.km : Infinity;
+  const nights = (PLAN && PLAN.ok) ? PLAN.days.length : 1;
+  box.innerHTML = '<div class="lh"><span>Locked stops</span>'
+    + '<button class="lx" onclick="clearLocks()">clear all</button></div>'
+    + mine.map(l => {
+        const out = !(l.km > lo + 0.3 && l.km < hi - 0.3);
+        let sel = '<select onchange="setLockNight(\'' + l.id + '\', this.value)">'
+          + '<option value=""' + (l.night == null ? ' selected' : '') + '>any night</option>';
+        for (let n = 1; n <= Math.max(nights, l.night || 0); n++)
+          sel += '<option value="' + n + '"' + (l.night === n ? ' selected' : '')
+               + '>night ' + n + '</option>';
+        sel += '</select>';
+        return '<div class="lk' + (out ? ' out' : '') + '">'
+          + '<button class="lx" onclick="toggleLock(\'' + l.id + '\')" title="remove">x</button>'
+          + '<b>' + esc(l.label) + '</b><span class="km">km ' + l.km.toFixed(1) + '</span>'
+          + (out ? '<span class="ow">outside your section - ignored</span>' : sel)
+          + '</div>';
+      }).join('');
 }
 
 // --- rendering ------------------------------------------------------------
-function badge(t){
+function badge(t, locked){
   const s = TYPES[t] || TYPES.A;
   return L.divIcon({className:'', iconSize:[19,19], iconAnchor:[9.5,9.5],
-    html:'<div class="badge" style="background:'+s.bg+';border-color:'+s.bd+';color:'+s.fg+'">'+t+'</div>'});
+    html:'<div class="badge' + (locked ? ' locked' : '') + '" style="background:'+s.bg
+         +';border-color:'+s.bd+';color:'+s.fg+'">'+t+'</div>'});
 }
 function pinIcon(colour){
   return L.divIcon({className:'', iconSize:[15,15], iconAnchor:[7.5,7.5],
@@ -317,10 +486,13 @@ function drawShelters(){
   const hi = (pick.start && pick.end) ? pick.end.km + 1 : Infinity;
   let n = 0;
   rt.shelters.forEach(s => {
+    const lk = lockOf(s.id);
     if (s.km < lo || s.km > hi) return;
-    if (!on.has(s.type) || !b.contains(L.latLng(s.ll[0], s.ll[1]))) return;
+    // A locked stop stays on the map even with its type switched off: hiding
+    // a place the plan is still built around would be a lie.
+    if ((!on.has(s.type) && !lk) || !b.contains(L.latLng(s.ll[0], s.ll[1]))) return;
     n++;
-    L.marker(s.ll, {icon:badge(s.type)})
+    L.marker(s.ll, {icon:badge(s.type, !!lk)})
      .bindPopup('<h4>' + esc(s.label) + '</h4><p class="m">'
        + (TYPES[s.type] ? TYPES[s.type].label : s.type)
        + (s.ele ? ' · ' + s.ele + ' m' : '')
@@ -329,7 +501,10 @@ function drawShelters(){
        + (s.capacity ? '<br>capacity ' + esc(s.capacity) : '')
        + (s.confidence !== 'high' ? '<br><i>classified from incomplete tags ('
            + s.confidence + ' confidence)</i>' : '')
-       + '<br><span style="color:#6a8398">' + esc(s.id) + '</span></p>')
+       + '<br><span style="color:#6a8398">' + esc(s.id) + '</span></p>'
+       + '<p style="margin:5px 0 0"><button class="lk-b' + (lk ? ' on' : '')
+       + '" onclick="toggleLock(\'' + s.id + '\')">'
+       + (lk ? 'unlock this stop' : 'lock as a stop') + '</button></p>')
      .addTo(layers.shelters);
   });
   hint.textContent = n + ' places to sleep in view · ' + ROUTE_META[active].name
@@ -404,6 +579,7 @@ function render(){
   list.innerHTML = ''; msg.className = ''; msg.innerHTML = '';
   document.getElementById('gpx').disabled = !(PLAN && PLAN.ok);
   const rt = R[active];
+  drawLocks();
 
   if (!PLAN){
     sum.innerHTML = '<div class="big">' + (rt ? ROUTE_META[active].name : '—') + '</div>'
@@ -422,6 +598,17 @@ function render(){
     sum.innerHTML = '<div class="big">No plan possible</div>';
     drawProfile();
     msg.className = 'err';
+    if (PLAN.kind === 'pin'){
+      const ns = PLAN.nights.filter(n => n > 0);
+      let when;
+      if (ns.length > 4) when = 'nights ' + ns[0] + '-' + ns[ns.length-1];
+      else if (ns.length === 1) when = 'night ' + ns[0];
+      else when = 'night ' + ns.slice(0, -1).join(', ') + ' or ' + ns[ns.length-1];
+      msg.innerHTML = '<b>' + esc(PLAN.node.label) + '</b> cannot be night ' + PLAN.want
+        + '. Within your daily limits it falls on ' + when
+        + '. Change the night, or widen the daily range.';
+      return;
+    }
     const d = PLAN.day, why = PLAN.reasons, bits = [];
     if (why.indexOf('distance') >= 0)
       bits.push('<b>' + d.km.toFixed(1) + ' km</b> door to door'
@@ -438,7 +625,9 @@ function render(){
       + [].concat(
           why.indexOf('distance') >= 0 ? ['raise the daily maximum past ' + Math.ceil(d.km) + ' km'] : [],
           why.indexOf('climb') >= 0 ? ['raise the climb limit past ' + d.up + ' m'] : [],
-          ['allow more shelter types', 'or plan a bivouac there']).join(', ') + '.';
+          ['allow more shelter types', 'or plan a bivouac there']).join(', ') + '.'
+      + (PLAN.lock ? '<br>This step is forced by your locked stop at <b>'
+          + esc(PLAN.lock.label) + '</b> — unlock it to let the planner choose.' : '');
     return;
   }
   const tot = PLAN.days.reduce((a,d) => a + d.km, 0);
@@ -461,15 +650,25 @@ function render(){
       + d.hours.toFixed(1) + ' h'
       + (d.detour > 0.05 ? '<br><span style="color:#ffcf90">includes '
           + (d.detour*1000).toFixed(0) + ' m off route</span>' : '')
-      + (d.to.ele ? '<br>' + d.to.ele + ' m · km ' + d.to.km.toFixed(1) : '') + '</div>';
+      + (d.to.ele ? '<br>' + d.to.ele + ' m · km ' + d.to.km.toFixed(1) : '')
+      + (d.to.id ? '<br><button class="lk-b' + (lockOf(d.to.id) ? ' on' : '')
+          + '" onclick="event.stopPropagation();toggleLock(\'' + d.to.id + '\','
+          + (i+1) + ')">' + (lockOf(d.to.id) ? 'locked to night ' + (i+1)
+                                             : 'keep as night ' + (i+1)) + '</button>' : '')
+      + '</div>';
     el.onclick = () => map.fitBounds(
       L.latLngBounds(llAtKm(rt, d.from.km), llAtKm(rt, d.to.km)), {padding:[45,45]});
     list.appendChild(el);
   });
   PLAN.stops.forEach((s, i) => {
     if (!s.type) return;
-    L.marker(s.ll || llAtKm(rt, s.km), {icon:badge(s.type), zIndexOffset:600})
-     .bindPopup('<h4>Night ' + i + ' — ' + esc(s.label) + '</h4>').addTo(layers.stops);
+    const lk = lockOf(s.id);
+    L.marker(s.ll || llAtKm(rt, s.km), {icon:badge(s.type, !!lk), zIndexOffset:600})
+     .bindPopup('<h4>Night ' + i + ' — ' + esc(s.label) + '</h4>'
+       + '<p style="margin:5px 0 0"><button class="lk-b' + (lk ? ' on' : '')
+       + '" onclick="toggleLock(\'' + s.id + '\',' + i + ')">'
+       + (lk ? 'unlock' : 'keep this as night ' + i) + '</button></p>')
+     .addTo(layers.stops);
   });
   drawProfile();
   const low = PLAN.stops.filter(s => s.confidence && s.confidence !== 'high');
@@ -562,6 +761,7 @@ function replan(){
   if (!(b > a)){ PLAN = null; render(); return; }
   pick = {start:{route:active, km:a}, end:{route:active, km:b}};
   PLAN = autoPlan(rt, a, b, {types, maxOffM:2500,
+    locks:LOCKS.filter(l => l.route === active),
     minKm:+document.getElementById('minKm').value,
     maxKm:+document.getElementById('maxKm').value,
     maxAsc:+document.getElementById('maxAsc').value});
