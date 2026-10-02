@@ -18,7 +18,8 @@ h1{font-size:15px;color:#fff;font-weight:600}
 .rt .dot{display:inline-block;width:9px;height:9px;border-radius:50%;margin-right:5px;opacity:.35}
 .rt.on .dot{opacity:1}
 .rt .len{font-weight:400;font-size:10.5px;opacity:.7;margin-left:5px}
-#pickState{font-size:11.5px;color:#8aa4bc;margin-left:auto}
+#pickState{font-size:11.5px;color:#8aa4bc;margin-left:auto;background:#122942;
+  border:1px solid #243d58;border-radius:6px;padding:4px 10px}
 #pickState b{color:#7ad0f0}
 #controls{display:flex;flex-wrap:wrap;gap:13px;align-items:flex-end;padding:9px 14px;
   border-bottom:1px solid #1e3247;background:#0e1e2e}
@@ -26,6 +27,9 @@ h1{font-size:15px;color:#fff;font-weight:600}
 .ctl label{font-size:10px;color:#7a9ab8;text-transform:uppercase;letter-spacing:.4px}
 input[type=number]{background:#0f2030;color:#d0e0f0;border:1px solid #2a4060;
   border-radius:5px;padding:5px 7px;font:inherit;font-size:12px;width:78px}
+.pair{display:flex;align-items:center;gap:4px}
+.pair input[type=number]{width:54px}
+.pair span{color:#5d7e99;font-size:12px}
 .types{display:flex;gap:7px;flex-wrap:wrap}
 .types label{display:flex;align-items:center;gap:3px;font-size:11px;color:#bcd4e6;
   text-transform:none;letter-spacing:0;cursor:pointer}
@@ -59,6 +63,7 @@ button:disabled{opacity:.4;cursor:default}
 .badge{border-radius:3px;width:19px;height:19px;line-height:17px;text-align:center;
   font-size:11px;font-weight:700;border:2px solid}
 .pin{width:15px;height:15px;border-radius:50%;border:3px solid #fff;box-shadow:0 0 5px #000a}
+.leaflet-marker-draggable .pin{cursor:grab}
 #legend{position:absolute;bottom:10px;left:10px;z-index:900;background:#12253ae6;
   border:1px solid #2a4060;border-radius:7px;padding:7px 9px;font-size:10.5px}
 #legend div{display:flex;align-items:center;gap:6px;margin:2px 0}
@@ -94,19 +99,28 @@ button:disabled{opacity:.4;cursor:default}
 <div id="top">
   <h1>Pyrenees traverse planner</h1>
   <div id="routeToggles"></div>
-  <div id="pickState">Click a route line to set your <b>start</b></div>
+  <div id="pickState">Click near a route to set your <b>start</b></div>
 </div>
 
 <div id="controls">
   <div class="ctl"><label for="startKm">Start (km)</label><input type="number" id="startKm" value="0" min="0" step="1"></div>
   <div class="ctl"><label for="endKm">Finish (km)</label><input type="number" id="endKm" value="150" min="1" step="1"></div>
-  <div class="ctl"><label for="minKm">Day min</label><input type="number" id="minKm" value="10" min="1" step="1"></div>
-  <div class="ctl"><label for="maxKm">Day max</label><input type="number" id="maxKm" value="20" min="2" step="1"></div>
-  <div class="ctl"><label for="maxAsc">Max climb (m)</label><input type="number" id="maxAsc" value="1600" min="0" step="100"></div>
+  <div class="ctl"><label for="minKm">Km per day · min / max</label>
+    <div class="pair"><input type="number" id="minKm" value="10" min="0" step="1"
+           title="shortest day you will accept, km door to door including detours">
+      <span>–</span>
+      <input type="number" id="maxKm" value="20" min="1" step="1"
+           title="longest day you will accept, km door to door including detours"></div></div>
+  <div class="ctl"><label for="minAsc">Climb per day (m) · min / max</label>
+    <div class="pair"><input type="number" id="minAsc" value="0" min="0" step="100"
+           title="least ascent you want in a day — 0 for no minimum">
+      <span>–</span>
+      <input type="number" id="maxAsc" value="1600" min="0" step="100"
+           title="most ascent you will accept in a day — 0 for no limit"></div></div>
   <div class="ctl"><label>Will sleep in</label><div class="types" id="types"></div></div>
   <div class="ctl"><label>&nbsp;</label><button id="go">Plan it</button></div>
   <div class="ctl"><label>&nbsp;</label><button id="whole" class="sec">Whole route</button></div>
-  <div class="ctl"><label>&nbsp;</label><button id="clear" class="sec">Clear pins</button></div>
+  <div class="ctl"><label>&nbsp;</label><button id="clear" class="sec">Reset</button></div>
   <div class="ctl"><label>&nbsp;</label><button id="gpx" class="sec">Export GPX</button></div>
 </div>
 
@@ -150,6 +164,7 @@ const ROUTE_META = {
   gr11: {name:'GR11', full:'GR 11 — Spanish side',       colour:'#e070c0', on:false}
 };
 const SHELTER_ZOOM = 10;      // below this the badges merge into a solid mass
+const SNAP_PX = 44;           // a click this close to a route counts as on it
 const DAY_COLOURS = ['#4a9fd0','#e05030','#e09020','#20a060','#9040d0','#d04090',
                      '#40b0a0','#c0a020','#7060d0','#d06040'];
 const dayColour = i => DAY_COLOURS[i % DAY_COLOURS.length];
@@ -295,6 +310,10 @@ function autoPlan(rt, startKm, endKm, opts){
         // A lock may make a short day - it was asked for by name.
         if (d.km < opts.minKm && j < N - 1 && !required[i] && !required[j]) continue;
         if (opts.maxAsc > 0 && d.up > opts.maxAsc) continue;
+        // Minimums are about the day being worth having, so the last day into
+        // the finish is exempt - you arrive where you arrive.
+        if (opts.minAsc > 0 && d.up < opts.minAsc && j < N - 1
+            && !required[i] && !required[j]) continue;
         ej.push(j);
         ec.push(Math.abs(d.km - ideal) + (nodes[j].offM / 1000) * 2
                 + (opts.maxAsc > 0 ? Math.max(0, d.up - opts.maxAsc*0.85) / 120 : 0));
@@ -343,16 +362,26 @@ function autoPlan(rt, startKm, endKm, opts){
     let far = 0;
     for (let i = 0; i < N; i++)
       if (reach(i).length && nodes[i].km > nodes[far].km) far = i;
-    let best = null;
-    for (let j = far + 1; j < N && !best; j++){
-      const d = dayOf(far, j), reasons = [];
-      if (d.km > opts.maxKm) reasons.push('distance');
-      if (opts.maxAsc > 0 && d.up > opts.maxAsc) reasons.push('climb');
-      if (reasons.length) best = {node:nodes[j], d:d, reasons:reasons};
+    // Why can nothing follow `far`? Classify the candidates in reach instead
+    // of reporting only the first that breaks a maximum: with minimums in
+    // play the real obstacle is often "everything close enough is too easy".
+    const options = [];
+    for (let j = far + 1; j < N; j++){
+      const d = dayOf(far, j), why = [];
+      if (d.km > opts.maxKm) why.push('distance');
+      else if (d.km < opts.minKm && j < N - 1) why.push('short');
+      if (opts.maxAsc > 0 && d.up > opts.maxAsc) why.push('climb');
+      else if (opts.minAsc > 0 && d.up < opts.minAsc && j < N - 1) why.push('flat');
+      if (why.length) options.push({node:nodes[j], d:d, why:why});
+      if (d.trackKm > opts.maxKm) break;      // past everything in reach
     }
-    if (!best) best = {node:nodes[N-1], d:dayOf(far, N-1), reasons:['distance']};
+    // A gap you cannot bridge is a harder fact than a day that is too easy,
+    // so a maximum leads the report where one is broken.
+    let best = options.find(o => o.why.indexOf('distance') >= 0
+                              || o.why.indexOf('climb') >= 0) || options[0];
+    if (!best) best = {node:nodes[N-1], d:dayOf(far, N-1), why:['distance']};
     return {ok:false, kind:'gap', stuckAt:nodes[far], next:best.node, day:best.d,
-            reasons:best.reasons,
+            reasons:best.why, options:options,
             lock:(nextReq[far] < N && nextReq[far] <= nodes.indexOf(best.node))
                  ? nodes[nextReq[far]] : null};
   }
@@ -455,7 +484,6 @@ function drawRoutes(){
       weight: isActive ? (ranged ? 2 : 4) : 2.5,
       opacity: isActive ? (ranged ? 0.3 : 0.95) : 0.45
     }).addTo(map);
-    lines[id].on('click', ev => onLineClick(id, [ev.latlng.lat, ev.latlng.lng]));
   });
   if (selLine){ map.removeLayer(selLine); selLine = null; }
   if (pick.start && pick.end && R[active]){
@@ -464,7 +492,6 @@ function drawRoutes(){
                          .map(p => [p[0], p[1]]);
     if (seg.length > 1){
       selLine = L.polyline(seg, {color:ROUTE_META[active].colour, weight:5, opacity:1}).addTo(map);
-      selLine.on('click', ev => onLineClick(active, [ev.latlng.lat, ev.latlng.lng]));
     }
   }
 }
@@ -516,36 +543,109 @@ function drawPins(){
   ['start','end'].forEach(k => {
     const p = pick[k];
     if (!p || !R[p.route]) return;
-    L.marker(llAtKm(R[p.route], p.km),
-             {icon:pinIcon(k === 'start' ? '#50d080' : '#e05050'), zIndexOffset:900})
-     .bindPopup('<h4>' + (k === 'start' ? 'Start' : 'Finish') + '</h4><p class="m">'
-       + ROUTE_META[p.route].name + ' km ' + p.km.toFixed(1) + '</p>')
-     .addTo(layers.pins);
+    const name = k === 'start' ? 'Start' : 'Finish';
+    const m = L.marker(llAtKm(R[p.route], p.km),
+             {icon:pinIcon(k === 'start' ? '#50d080' : '#e05050'), zIndexOffset:900,
+              draggable:true, autoPan:true});
+    m.bindTooltip(name + ' · km ' + p.km.toFixed(1) + ' — drag to move',
+                  {direction:'top', offset:[0,-11]});
+    // Live readout while dragging, snapped to the route, so you can see where
+    // you are landing before letting go.
+    m.on('drag', () => {
+      const ll = m.getLatLng();
+      m.setTooltipContent(name + ' · km '
+        + nearestKmOn(R[p.route], [ll.lat, ll.lng]).km.toFixed(1));
+    });
+    // On release the pin returns to the line. It means "this point on the
+    // route", so leaving it on a hillside would be a lie about the distance.
+    m.on('dragend', () => {
+      const ll = m.getLatLng();
+      const km = nearestKmOn(R[p.route], [ll.lat, ll.lng]).km;
+      if (k === 'start' && !pick.end){
+        pick.start = {route:p.route, km:km};
+        syncInputs(); drawRoutes(); drawPins(); drawShelters(); render();
+        return;
+      }
+      let a = (k === 'start') ? km : pick.start.km;
+      let b = (k === 'start') ? pick.end.km : km;
+      if (b < a){ const t = a; a = b; b = t; }   // dragged past the other pin
+      pick = {start:{route:p.route, km:a}, end:{route:p.route, km:b}};
+      syncInputs(); replan();
+    });
+    m.addTo(layers.pins);
   });
 }
 
-function onLineClick(id, ll){
+function setPick(id, km){
   if (!R[id]) return;
-  active = id;                                 // clicking a line plans on it
-  const hit = nearestKmOn(R[id], ll);
+  active = id;                                 // choosing a point plans on it
   if (!pick.start || pick.start.route !== id || pick.end){
-    pick = {start:{route:id, km:hit.km}, end:null};
+    pick = {start:{route:id, km:km}, end:null};
     PLAN = null;
   } else {
-    const a = Math.min(pick.start.km, hit.km), b = Math.max(pick.start.km, hit.km);
+    const a = Math.min(pick.start.km, km), b = Math.max(pick.start.km, km);
     pick = {start:{route:id, km:a}, end:{route:id, km:b}};
   }
-  syncInputs(); drawRoutes(); drawPins(); updateToggles(); drawShelters();
-  if (pick.start && pick.end) replan(); else render();
+  syncInputs(); drawPins(); updateToggles();
+  if (pick.start && pick.end){
+    replan();                       // which refreshes the lines and shelters
+  } else {
+    drawRoutes(); drawShelters(); render();
+  }
+}
+
+// Hitting a 2 px line exactly is unreasonable, and worse on a phone, so any
+// click within SNAP_PX of a visible route snaps onto it. The tolerance is in
+// screen pixels rather than km so it feels the same at every zoom - at zoom 8
+// a fixed 1 km would be invisible, at zoom 15 it would swallow the screen.
+function onMapClick(latlng){
+  let best = null;
+  Object.keys(ROUTE_META).forEach(id => {
+    if (!ROUTE_META[id].on || !R[id]) return;
+    const hit = nearestKmOn(R[id], [latlng.lat, latlng.lng]);
+    if (!best || hit.off < best.off) best = {id:id, km:hit.km, off:hit.off};
+  });
+  if (!best) return;
+  const ll = llAtKm(R[best.id], best.km);
+  const px = map.latLngToContainerPoint(latlng)
+                .distanceTo(map.latLngToContainerPoint(L.latLng(ll[0], ll[1])));
+  if (px > SNAP_PX){
+    // Say how far off it was rather than ignoring the click silently.
+    const st = document.getElementById('pickState');
+    st.innerHTML = '<span style="color:#ffcf90">That spot is '
+      + (best.off < 1 ? Math.round(best.off * 1000) + ' m' : best.off.toFixed(1) + ' km')
+      + ' from the nearest route — click closer to the line</span>';
+    clearTimeout(onMapClick._t);
+    onMapClick._t = setTimeout(syncInputs, 2800);
+    return;
+  }
+  setPick(best.id, best.km);
+}
+
+// A real reset. The old handler cleared the pins but never called
+// drawRoutes(), so the base line stayed dimmed to 0.3 with the previous
+// selection still drawn heavy on top of it - which looks exactly like the
+// route disappearing. Locked stops survive; they have their own clear all.
+function resetAll(){
+  pick = {start:null, end:null};
+  PLAN = null;
+  const rt = R[active];
+  const set = (id, v) => { document.getElementById(id).value = v; };
+  set('startKm', 0);
+  set('endKm', rt ? Math.min(150, Math.floor(rt.lengthKm)) : 150);
+  set('minKm', 10); set('maxKm', 20);
+  set('minAsc', 0); set('maxAsc', 1600);
+  syncInputs(); drawRoutes(); drawPins(); drawShelters(); render();
 }
 
 function syncInputs(){
   if (pick.start) document.getElementById('startKm').value = pick.start.km.toFixed(1);
   if (pick.end)   document.getElementById('endKm').value   = pick.end.km.toFixed(1);
   const st = document.getElementById('pickState');
-  if (!pick.start) st.innerHTML = 'Click a route line to set your <b>start</b>';
+  if (!pick.start) st.innerHTML = 'Click near a route to set your <b>start</b>';
   else if (!pick.end) st.innerHTML = 'Start <b>' + ROUTE_META[pick.start.route].name
-    + ' km ' + pick.start.km.toFixed(1) + '</b> — now click your <b>finish</b>';
+    + ' km ' + pick.start.km.toFixed(1) + '</b> — now click your <b>finish</b>'
+    + ' <span style="color:#6a8398">(or drag the green pin)</span>';
   else st.innerHTML = '<b>' + ROUTE_META[active].name + '</b> km '
     + pick.start.km.toFixed(1) + ' → ' + pick.end.km.toFixed(1)
     + ' <span style="color:#6a8398">(' + (pick.end.km - pick.start.km).toFixed(0) + ' km)</span>';
@@ -587,10 +687,11 @@ function render(){
             + rt.lengthKm.toFixed(0) + ' km · ' + rt.shelters.length
             + ' places to sleep within 2.5 km</div>' : '');
     msg.className = 'hint';
-    msg.innerHTML = 'Click the route on the map to drop your <b>start</b>, then click again for '
-      + 'your <b>finish</b> — or type kilometres above. The toggles at the top show or hide each '
-      + 'route, so you can have all three up at once; clicking a line on the map is what chooses '
-      + 'the one you plan on.';
+    msg.innerHTML = 'Click <b>anywhere near a route</b> to drop your <b>start</b>, then click '
+      + 'again for your <b>finish</b> — you do not have to hit the line exactly, and either pin '
+      + 'can be dragged afterwards. You can also type kilometres above.<br><br>'
+      + 'The toggles at the top show or hide each route, so you can have all three up at once; '
+      + 'the one you click on is the one you plan on.';
     drawProfile();
     return;
   }
@@ -598,6 +699,10 @@ function render(){
     sum.innerHTML = '<div class="big">No plan possible</div>';
     drawProfile();
     msg.className = 'err';
+    if (PLAN.kind === 'limits'){
+      msg.innerHTML = PLAN.detail + ' Nothing can satisfy both — adjust one of them.';
+      return;
+    }
     if (PLAN.kind === 'pin'){
       const ns = PLAN.nights.filter(n => n > 0);
       let when;
@@ -618,6 +723,12 @@ function render(){
     if (why.indexOf('climb') >= 0)
       bits.push('<b>' + d.up + ' m</b> of climb, above your '
         + document.getElementById('maxAsc').value + ' m limit');
+    if (why.indexOf('short') >= 0)
+      bits.push('only <b>' + d.km.toFixed(1) + ' km</b>, below your '
+        + document.getElementById('minKm').value + ' km minimum');
+    if (why.indexOf('flat') >= 0)
+      bits.push('only <b>' + d.up + ' m</b> of climb, below your '
+        + document.getElementById('minAsc').value + ' m minimum');
     msg.innerHTML = 'Stuck after <b>' + esc(PLAN.stuckAt.label) + '</b> (km '
       + PLAN.stuckAt.km.toFixed(1) + '). The next place you could sleep is <b>'
       + esc(PLAN.next.label) + '</b> at km ' + PLAN.next.km.toFixed(1) + ' — '
@@ -625,7 +736,10 @@ function render(){
       + [].concat(
           why.indexOf('distance') >= 0 ? ['raise the daily maximum past ' + Math.ceil(d.km) + ' km'] : [],
           why.indexOf('climb') >= 0 ? ['raise the climb limit past ' + d.up + ' m'] : [],
+          why.indexOf('short') >= 0 ? ['lower the daily minimum below ' + Math.floor(d.km) + ' km'] : [],
+          why.indexOf('flat') >= 0 ? ['lower the climb minimum below ' + d.up + ' m'] : [],
           ['allow more shelter types', 'or plan a bivouac there']).join(', ') + '.'
+      + blockedByMinimums()
       + (PLAN.lock ? '<br>This step is forced by your locked stop at <b>'
           + esc(PLAN.lock.label) + '</b> — unlock it to let the planner choose.' : '');
     return;
@@ -678,6 +792,25 @@ function render(){
       + ' classified from incomplete OSM tags: ' + low.map(s=>esc(s.label)).join(', ')
       + '. Treat the type as a best guess and check before relying on it.';
   }
+}
+
+// When a minimum is what rules out the near options, saying so is the
+// difference between "the mountains are too hard" and "your floor is too high".
+function blockedByMinimums(){
+  if (!PLAN || PLAN.ok || !PLAN.options) return '';
+  const only = PLAN.options.filter(o =>
+    o.why.length && o.why.every(w => w === 'short' || w === 'flat'));
+  if (!only.length) return '';
+  // A village can hold four bordas at the same spot; listing all of them is
+  // four names for one decision, so keep one per distinct day.
+  const seen = new Set(), uniq = [];
+  only.forEach(o => {
+    const k = o.d.km.toFixed(1) + '/' + o.d.up;
+    if (!seen.has(k)){ seen.add(k); uniq.push(o); }
+  });
+  return '<br>Closer options exist but your minimums rule them out: '
+    + uniq.slice(0, 3).map(o => esc(o.node.label) + ' (' + o.d.km.toFixed(1)
+        + ' km, ↑' + o.d.up + ' m)').join(', ') + '.';
 }
 
 // Distance along the x axis, not point index, and one coloured band per day -
@@ -760,12 +893,23 @@ function replan(){
   const b = Math.min(rt.lengthKm, +document.getElementById('endKm').value);
   if (!(b > a)){ PLAN = null; render(); return; }
   pick = {start:{route:active, km:a}, end:{route:active, km:b}};
-  PLAN = autoPlan(rt, a, b, {types, maxOffM:2500,
-    locks:LOCKS.filter(l => l.route === active),
-    minKm:+document.getElementById('minKm').value,
-    maxKm:+document.getElementById('maxKm').value,
-    maxAsc:+document.getElementById('maxAsc').value});
-  syncInputs(); drawPins(); render();
+  const minKm  = +document.getElementById('minKm').value;
+  const maxKm  = +document.getElementById('maxKm').value;
+  const minAsc = +document.getElementById('minAsc').value;
+  const maxAsc = +document.getElementById('maxAsc').value;
+  // Catch a contradictory range here rather than letting the planner grind to
+  // "no plan possible", which would blame the mountains for a typo.
+  if (minKm > maxKm)
+    PLAN = {ok:false, kind:'limits', detail:'Your shortest day (' + minKm
+            + ' km) is longer than your longest day (' + maxKm + ' km).'};
+  else if (minAsc > 0 && maxAsc > 0 && minAsc > maxAsc)
+    PLAN = {ok:false, kind:'limits', detail:'Your least climb (' + minAsc
+            + ' m) is more than your most climb (' + maxAsc + ' m).'};
+  else
+    PLAN = autoPlan(rt, a, b, {types, maxOffM:2500,
+      locks:LOCKS.filter(l => l.route === active),
+      minKm:minKm, maxKm:maxKm, minAsc:minAsc, maxAsc:maxAsc});
+  syncInputs(); drawRoutes(); drawPins(); drawShelters(); render();
 }
 
 function exportGPX(){
@@ -868,10 +1012,7 @@ async function ensureRoute(id){
 
   document.getElementById('go').onclick = replan;
   document.getElementById('gpx').onclick = exportGPX;
-  document.getElementById('clear').onclick = () => {
-    pick = {start:null, end:null}; PLAN = null;
-    syncInputs(); drawPins(); render(); drawShelters();
-  };
+  document.getElementById('clear').onclick = resetAll;
   document.getElementById('whole').onclick = () => {
     document.getElementById('startKm').value = 0;
     document.getElementById('endKm').value = Math.floor(R[active].lengthKm);
@@ -879,8 +1020,11 @@ async function ensureRoute(id){
     if (lines[active]) map.fitBounds(lines[active].getBounds(), {padding:[20,20]});
   };
   tbox.onchange = e => { TYPES[e.target.dataset.t].on = e.target.checked; drawShelters(); replan(); };
-  ['startKm','endKm','minKm','maxKm','maxAsc'].forEach(id =>
+  ['startKm','endKm','minKm','maxKm','minAsc','maxAsc'].forEach(id =>
     document.getElementById(id).onchange = replan);
+  // One handler on the map rather than one per line: a click anywhere snaps to
+  // the nearest visible route, so the line no longer has to be hit exactly.
+  map.on('click', e => onMapClick(e.latlng));
   map.on('moveend', drawShelters);
   window.addEventListener('resize', () => { drawProfile(); });
   window.__plannerReady = true;
