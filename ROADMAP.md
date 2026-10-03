@@ -10,7 +10,7 @@ Ordered by risk to a hiker first, then by usefulness.
 |---|------|-----|--------|
 | 1 | **Accommodation safety pass** — never plan to a hut OSM records as demolished, ruined, abandoned, closed or private; show the reason on the map | 104 of 452 feasible plans in a sweep stopped at such a hut | **done** |
 | 2 | **Access points** — stations, bus stations and airports, with distance to the trail; click one to start or finish there | Your idea: plan from where the train arrives | needs Q6–Q10 |
-| 3 | **Offline for the planner** — register the service worker, cache route and shelter data, download tiles for the chosen section, and version the data so a safety update reaches phones that cached the old copy | The planner never registers the service worker; a browser was seen planning with a stale hut file | next if Q6–Q10 are open |
+| 3 | **Offline for the planner** — page and all route and hut data saved on first visit; map tiles saved per section with a size estimate and a hard cap; data re-checked whenever there is signal; wifi login pages can no longer overwrite saved files | The planner did not work offline at all | **done** |
 | 4 | **Phone layout** — controls, day list and profile usable at 375 px | No mobile CSS exists; the main use is a phone on the trail | |
 | 5 | **Your location** — GPS dot, distance along the route to the next stop | The first feature this project had; the planner lost it | |
 | 6 | **Shareable plan links** — route, section, limits, types and locked stops in the URL | Send a plan to a walking partner and reopen it unchanged | |
@@ -46,8 +46,20 @@ closed by an iron door"; "a ruined hut restored in 2019" — so each nomination
 gets a human decision with a reason in `src/data/status_review.json`, and
 `finalise_shelters.py` refuses to write the data while any is unreviewed.
 
+## Known limits
+
+- Behind a wifi login page a phone reports itself online, so the offline panel says
+  "Online" while the planner is in fact running from saved data. It still works;
+  only the label is wrong.
+- Saved map tiles come from OpenTopoMap, a volunteer-run server. Per-section saving
+  with a 4,000-tile cap is reasonable for personal use; a public launch needs a
+  provider whose terms allow offline download (item 9).
+
 ## Done
 
+- Offline planner, tested with the server dropping connections, answering with a
+  wifi login page, returning 503, and a service-worker update installing behind a
+  login page (`src/offline_test_server.py`)
 - Hut status: ruined, closed and private huts never planned (this change)
 - Every visible route's lines and accommodation shown (`a72b290`)
 - Min/max distance and climb per day, click snapping, draggable pins, real reset (`47a2142`)

@@ -216,6 +216,9 @@ doc = {
     'source': {'provider': 'OpenStreetMap', 'licence': 'ODbL 1.0',
                'attribution': '© OpenStreetMap contributors',
                'fetched': '2026-09-28',
+               # shown to the hiker beside the data, so they know how old the
+               # hut statuses are when planning offline
+               'reviewed': review['reviewed'],
                'elevation': 'AWS Terrain Tiles z12, used where the OSM ele tag '
                             'is absent or disagrees by more than 50 m',
                'maxOffRouteKm': 2.5},

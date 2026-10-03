@@ -3,6 +3,10 @@
 <head>
 <meta charset="utf-8"/>
 <meta name="viewport" content="width=device-width,initial-scale=1"/>
+<meta name="theme-color" content="#0a1622"/>
+<link rel="manifest" href="./planner.webmanifest"/>
+<link rel="apple-touch-icon" href="./apple-touch-icon.png"/>
+<meta name="apple-mobile-web-app-capable" content="yes"/>
 <title>Pyrenees traverse planner — GR10 · GR11 · HRP</title>
 <link rel="stylesheet" href="./leaflet.css"/>
 <style>
@@ -93,6 +97,22 @@ button:disabled{opacity:.4;cursor:default}
 .lk-b:hover{border-color:#4a9fd0}
 .badge.locked{box-shadow:0 0 0 2px #ffd060,0 0 5px #000a}
 .badge.faint{opacity:.48}
+#off-chip{background:#1a2d3f;border:1px solid #2a4060;border-radius:8px;padding:5px 10px;
+  color:#7ad0f0;font-size:10.5px;font-weight:700;cursor:pointer;box-shadow:0 2px 8px #0009;
+  user-select:none;text-align:center}
+#off-chip.offline{color:#ffcf90;border-color:#7a5a20}
+#off-panel{background:#1a2d3f;border:1px solid #2a4060;border-radius:8px;padding:8px 10px;
+  color:#d0e0f0;font-size:10.5px;line-height:1.55;width:250px;box-shadow:0 2px 8px #0009;
+  margin-top:6px;display:none}
+#off-panel b{color:#7ad0f0}
+#off-panel .warn{color:#ffcf90}
+#off-panel .bad{color:#ff9a9a}
+#off-panel select,#off-panel button{font:inherit;font-size:10.5px;background:#0f2030;color:#d0e0f0;
+  border:1px solid #2a4060;border-radius:5px;padding:3px 7px;margin-top:5px;cursor:pointer}
+#off-panel button:disabled{opacity:.45;cursor:default}
+#off-bar{height:5px;background:#0f2030;border-radius:3px;margin-top:6px;overflow:hidden;display:none}
+#off-bar i{display:block;height:100%;width:0;background:#2e9bff;transition:width .2s}
+#off-note{color:#8aa4bc;font-size:9.5px;margin-top:6px}
 .badge.st-gone{filter:grayscale(1);opacity:.6;text-decoration:line-through;border-style:dashed}
 .badge.st-shut{box-shadow:0 0 0 2px #e05050,0 0 4px #000a}
 .st{margin:5px 0 0;padding:4px 6px;border-radius:4px;font-size:11px;line-height:1.35}
@@ -185,6 +205,7 @@ L.tileLayer('https://{s}.tile.opentopomap.org/{z}/{x}/{y}.png', {
 
 const R = {};                          // loaded routes by id
 let SHELTERS = null;
+let SHELTER_SOURCE = null;             // when the hut data was fetched and reviewed
 let active = 'hrp';                    // the route being planned
 let pick = {start:null, end:null};     // {route, km}
 let PLAN = null;
@@ -764,6 +785,7 @@ function render(){
   document.getElementById('gpx').disabled = !(PLAN && PLAN.ok);
   const rt = R[active];
   drawLocks();
+  if (window.__offlineRefresh) window.__offlineRefresh();   // section may have changed
 
   if (!PLAN){
     sum.innerHTML = '<div class="big">' + (rt ? ROUTE_META[active].name : '—') + '</div>'
@@ -1095,7 +1117,9 @@ async function ensureRoute(id){
     tg.appendChild(b);
   });
 
-  SHELTERS = await fetch('./data/shelters.json').then(x => x.json()).then(d => d.shelters);
+  const shelterDoc = await fetch('./data/shelters.json').then(x => x.json());
+  SHELTERS = shelterDoc.shelters;
+  SHELTER_SOURCE = shelterDoc.source || null;
   await ensureRoute('hrp');
   drawRoutes(); updateToggles();
   map.fitBounds(lines.hrp.getBounds(), {padding:[20,20]});
@@ -1121,6 +1145,208 @@ async function ensureRoute(id){
   map.on('moveend', drawShelters);
   window.addEventListener('resize', () => { drawProfile(); });
   window.__plannerReady = true;
+})();
+
+// ---------------------------------------------------------------------------
+// Offline.
+//
+// The service worker precaches this page and the data for all three routes, so
+// planning works with no signal from the first visit on. Map tiles are saved
+// per section on request: the corridor of the chosen stretch, 2.5 km either
+// side - the same distance the planner may detour to a hut - so every place it
+// can send you to is on the saved map.
+//
+// Tile URLs must match Leaflet's own requests exactly, subdomain included, or
+// the saved tiles are never found again at runtime.
+// ---------------------------------------------------------------------------
+(function(){
+  if (!('serviceWorker' in navigator) || !/^https?:$/.test(location.protocol)) return;
+
+  const TILE_MAX = 4000;        // must match sw.js - beyond it the oldest tiles go
+  const BUF_KM = 2.5, ZMIN = 8;
+  // Measured on 161 OpenTopoMap tiles in the Pyrenees: ~50 KB up to z14, ~37 KB
+  // at z15. Mountain tiles are heavier than lowland ones, so this is the honest
+  // basis for the estimate.
+  const tileKB = z => z >= 15 ? 37 : 50;
+  let tileCount = 0, busy = false, pageSaved = null, persisted = null;
+
+  const ctl = L.control({position:'topright'});
+  ctl.onAdd = function(){
+    const w = L.DomUtil.create('div');
+    w.innerHTML =
+      '<div id="off-chip" title="Save the map and plan with no signal">&#8681; Offline maps</div>'
+    + '<div id="off-panel">'
+    +   '<div id="off-status">Checking&hellip;</div>'
+    +   '<div id="off-est" style="margin-top:6px"></div>'
+    +   '<div><select id="off-zoom">'
+    +     '<option value="14" selected>Standard detail (to zoom 14)</option>'
+    +     '<option value="15">High detail (to zoom 15)</option>'
+    +   '</select></div>'
+    +   '<div><button id="off-go">Save map for this section</button> '
+    +       '<button id="off-clear">Clear saved maps</button></div>'
+    +   '<div id="off-bar"><i></i></div>'
+    +   '<div id="off-note">Do this on wifi, then <b>Add to Home Screen</b> &mdash; '
+    +     'iOS deletes saved data for sites that are only bookmarked.</div>'
+    + '</div>';
+    L.DomEvent.disableClickPropagation(w);
+    L.DomEvent.disableScrollPropagation(w);
+    return w;
+  };
+  ctl.addTo(map);
+
+  const $ = id => document.getElementById(id);
+  const chip = $('off-chip'), panel = $('off-panel'), status = $('off-status'),
+        est = $('off-est'), bar = $('off-bar'), barIn = bar.firstChild,
+        goBtn = $('off-go'), clrBtn = $('off-clear'), zoomSel = $('off-zoom');
+  const isOpen = () => panel.style.display === 'block';
+
+  function niceDate(iso){
+    const m = /^(\d{4})-(\d{2})-(\d{2})/.exec(iso || '');
+    if (!m) return iso || '?';
+    return (+m[3]) + ' ' + 'Jan Feb Mar Apr May Jun Jul Aug Sep Oct Nov Dec'.split(' ')[+m[2]-1]
+         + ' ' + m[1];
+  }
+
+  // --- tile maths, mirroring Leaflet ---------------------------------------
+  const lon2x = (lon, z) => Math.floor((lon + 180) / 360 * Math.pow(2, z));
+  const lat2y = (lat, z) => { const r = lat * Math.PI / 180;
+    return Math.floor((1 - Math.log(Math.tan(r) + 1 / Math.cos(r)) / Math.PI) / 2 * Math.pow(2, z)); };
+
+  function corridor(zMax){
+    if (!(pick.start && pick.end) || !R[active] || pick.start.route !== active) return null;
+    const rt = R[active];
+    const pts = rt.points.slice(idxAtKm(rt, pick.start.km), idxAtKm(rt, pick.end.km) + 1);
+    const seen = new Set(), urls = [];
+    let kb = 0;
+    for (let z = ZMIN; z <= zMax; z++){
+      for (let i = 0; i < pts.length; i++){
+        const lat = pts[i][0], lon = pts[i][1];
+        const dlat = BUF_KM / 111.0, dlon = BUF_KM / (111.0 * Math.cos(lat * Math.PI / 180));
+        const x0 = lon2x(lon - dlon, z), x1 = lon2x(lon + dlon, z);
+        const y0 = lat2y(lat + dlat, z), y1 = lat2y(lat - dlat, z);
+        for (let x = x0; x <= x1; x++) for (let y = y0; y <= y1; y++){
+          const key = z + '/' + x + '/' + y;
+          if (seen.has(key)) continue;
+          seen.add(key);
+          const s = 'abc'.charAt(Math.abs(x + y) % 3);      // Leaflet's subdomain rule
+          urls.push('https://' + s + '.tile.opentopomap.org/' + key + '.png');
+          kb += tileKB(z);
+        }
+      }
+    }
+    return {urls: urls, mb: kb / 1024,
+            label: ROUTE_META[active].name + ' km ' + pick.start.km.toFixed(0) + '–'
+                   + pick.end.km.toFixed(0)};
+  }
+
+  function drawStatus(){
+    const online = navigator.onLine;
+    chip.classList.toggle('offline', !online);
+    chip.innerHTML = online ? '&#8681; Offline maps' : 'Offline &middot; using saved data';
+    const src = SHELTER_SOURCE || {};
+    status.innerHTML = (online ? 'Online' : '<b class="warn">No signal</b>')
+      + ' &middot; page and hut data '
+      + (pageSaved === null ? 'checking&hellip;'
+         : pageSaved ? '<b>saved</b> &mdash; planning works offline'
+         : '<span class="warn">not saved yet</span>')
+      + '<br>Hut data: OpenStreetMap ' + niceDate(src.fetched)
+      + (src.reviewed ? ', reviewed ' + niceDate(src.reviewed) : '')
+      + '<br>Map tiles saved: <b>' + tileCount.toLocaleString() + '</b> of '
+      + TILE_MAX.toLocaleString()
+      + (persisted === true ? ' &middot; protected from clean-up' : '');
+  }
+
+  // The estimate is recomputed whenever the section changes, and the button is
+  // only enabled when the download is one the cache can actually hold.
+  function drawEstimate(){
+    if (busy) return;
+    const c = corridor(+zoomSel.value);
+    goBtn.disabled = true;
+    if (!c){
+      est.innerHTML = '<span class="warn">Pick a start and finish first</span> &mdash; the map is '
+        + 'saved for that section only, which keeps it small.';
+      return;
+    }
+    const n = c.urls.length;
+    if (n > TILE_MAX){
+      est.innerHTML = '<b>' + c.label + '</b> needs <b class="bad">' + n.toLocaleString()
+        + ' tiles</b> at this detail, more than the ' + TILE_MAX.toLocaleString()
+        + ' that fit. Choose standard detail or a shorter section.';
+      return;
+    }
+    est.innerHTML = '<b>' + c.label + '</b>: ' + n.toLocaleString() + ' tiles, about <b>'
+      + Math.ceil(c.mb) + ' MB</b>'
+      + (tileCount + n > TILE_MAX
+         ? '<br><span class="warn">This may push out maps saved for other sections - never '
+           + 'this one.</span>' : '');
+    goBtn.disabled = !navigator.serviceWorker.controller || !navigator.onLine;
+    if (!navigator.serviceWorker.controller)
+      est.innerHTML += '<br><span class="warn">Offline support is still starting - reload once.</span>';
+  }
+
+  function refresh(){
+    drawStatus(); drawEstimate();
+    if (navigator.serviceWorker.controller)
+      navigator.serviceWorker.controller.postMessage({type:'TILE_STATS'});
+    caches.match('./data/shelters.json').then(hit => { pageSaved = !!hit; drawStatus(); });
+    if (navigator.storage && navigator.storage.persisted)
+      navigator.storage.persisted().then(p => { persisted = p; drawStatus(); });
+  }
+  window.__offlineRefresh = () => { if (isOpen()) drawEstimate(); };
+
+  chip.addEventListener('click', () => {
+    panel.style.display = isOpen() ? 'none' : 'block';
+    if (isOpen()) refresh();
+  });
+  zoomSel.addEventListener('change', drawEstimate);
+
+  goBtn.addEventListener('click', () => {
+    const c = corridor(+zoomSel.value);
+    if (busy || !c || c.urls.length > TILE_MAX || !navigator.serviceWorker.controller) return;
+    // Ask the browser not to clear this under storage pressure. Granted for
+    // installed apps and well-used sites; asking costs nothing.
+    if (navigator.storage && navigator.storage.persist)
+      navigator.storage.persist().then(p => { persisted = p; drawStatus(); });
+    busy = true; goBtn.disabled = true; clrBtn.disabled = true;
+    bar.style.display = 'block'; barIn.style.width = '0';
+    est.innerHTML = 'Saving <b>' + c.label + '</b>: 0 / ' + c.urls.length.toLocaleString() + ' tiles&hellip;';
+    navigator.serviceWorker.controller.postMessage({type:'TILE_PREFETCH', urls:c.urls});
+  });
+
+  clrBtn.addEventListener('click', () => {
+    if (busy || !navigator.serviceWorker.controller) return;
+    navigator.serviceWorker.controller.postMessage({type:'TILE_CLEAR'});
+  });
+
+  navigator.serviceWorker.addEventListener('message', e => {
+    const m = e.data || {};
+    if (m.type === 'TILE_STATS'){ tileCount = m.count; drawStatus(); drawEstimate(); }
+    if (m.type === 'TILE_PROGRESS'){
+      barIn.style.width = (100 * m.done / m.total).toFixed(1) + '%';
+      est.innerHTML = 'Saving: <b>' + m.done.toLocaleString() + '</b> / '
+        + m.total.toLocaleString() + ' tiles&hellip;';
+    }
+    if (m.type === 'TILE_DONE'){
+      busy = false; clrBtn.disabled = false; bar.style.display = 'none';
+      tileCount = m.count; drawStatus(); drawEstimate();
+      est.innerHTML = (m.failed
+          ? '<span class="warn">Saved ' + (m.done - m.failed).toLocaleString() + ' of '
+            + m.total.toLocaleString() + ' tiles - ' + m.failed
+            + ' failed. Press save again on a better connection to fill the gaps.</span>'
+          : '<b>Saved.</b> ' + m.total.toLocaleString() + ' tiles for this section are on the device.')
+        + '<br>' + est.innerHTML;
+    }
+  });
+
+  window.addEventListener('online', refresh);
+  window.addEventListener('offline', refresh);
+  drawStatus();
+
+  navigator.serviceWorker.register('./sw.js')
+    .then(() => navigator.serviceWorker.ready)
+    .then(() => { if (isOpen()) refresh(); else caches.match('./data/shelters.json')
+                    .then(hit => { pageSaved = !!hit; }); })
+    .catch(err => { status.innerHTML = 'Offline support unavailable: ' + esc(err.message); });
 })();
 </script>
 </body>
