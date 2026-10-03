@@ -97,6 +97,12 @@ button:disabled{opacity:.4;cursor:default}
 .lk-b:hover{border-color:#4a9fd0}
 .badge.locked{box-shadow:0 0 0 2px #ffd060,0 0 5px #000a}
 .badge.faint{opacity:.48}
+#note{display:none;padding:7px 12px;font-size:11.5px;background:#2e2a12;color:#ffe9a0;
+  border-bottom:1px solid #5e5420}
+#note button{float:right;background:none;border:none;color:#ffe9a0;cursor:pointer;font-size:13px;padding:0 0 0 8px}
+.share-b{background:#15283a;border:1px solid #2a4060;color:#9ab8d0;border-radius:5px;font:inherit;
+  font-size:11px;padding:3px 9px;cursor:pointer;margin-top:6px}
+.share-b:hover{border-color:#4a9fd0;color:#dff0ff}
 #geo-chip{background:#1a2d3f;border:1px solid #2a4060;border-radius:8px;padding:5px 10px;
   color:#7ad0f0;font-size:10.5px;font-weight:700;cursor:pointer;box-shadow:0 2px 8px #0009;
   user-select:none;text-align:center;margin-bottom:6px}
@@ -200,6 +206,7 @@ button:disabled{opacity:.4;cursor:default}
     <div id="elev"><svg id="elev-svg"></svg><div class="none" id="elev-none">Pick a start and finish to see the profile</div></div>
   </div>
   <div id="side">
+    <div id="note"></div>
     <div id="summary"><div class="big">Loading…</div></div>
     <div id="msg"></div>
     <div id="locks"></div>
@@ -251,7 +258,8 @@ let SHELTER_SOURCE = null;             // when the hut data was fetched and revi
 let active = 'hrp';                    // the route being planned
 let pick = {start:null, end:null};     // {route, km}
 let PLAN = null;
-let LOCKS = [];                        // {route, id, km, label, type, night|null}
+let LOCKS = [];
+let hashLive = false;                  // off until a shared link has been applied                        // {route, id, km, label, type, night|null}
 const lines = {};
 const layers = {shelters:L.layerGroup().addTo(map), stops:L.layerGroup().addTo(map),
                 pins:L.layerGroup().addTo(map)};
@@ -480,6 +488,96 @@ function autoPlan(rt, startKm, endKm, opts){
   }
   return {ok:true, stops:path, days:days,
           ignored:allLocks.filter(l => !lockIds.has(l.id))};
+}
+
+
+// --- shareable links --------------------------------------------------------
+// The whole plan lives in the #fragment: route, section, limits, types, locked
+// stops and which routes are shown. The fragment, not a ?query: the service
+// worker finds its saved copy by URL, and a query string would make a shared
+// link miss it with no signal. The fragment is never sent to any server.
+//
+//   #r=hrp&s=20.0&e=150.0&d=10-20&c=0-1600&t=RCAGB&v=hrp,gr11&l=way/123:3,node/9
+function planToHash(){
+  const p = new URLSearchParams();
+  p.set('r', active);
+  const vis = Object.keys(ROUTE_META).filter(id => ROUTE_META[id].on);
+  if (vis.join() !== active) p.set('v', vis.join(','));
+  if (pick.start && pick.end){
+    p.set('s', pick.start.km.toFixed(1));
+    p.set('e', pick.end.km.toFixed(1));
+  }
+  const v = id => document.getElementById(id).value;
+  p.set('d', v('minKm') + '-' + v('maxKm'));
+  p.set('c', v('minAsc') + '-' + v('maxAsc'));
+  p.set('t', Object.keys(TYPES).filter(t => TYPES[t].on).join(''));
+  const mine = LOCKS.filter(l => l.route === active);
+  if (mine.length) p.set('l', mine.map(l => l.id + (l.night != null ? ':' + l.night : '')).join(','));
+  return p.toString();
+}
+function writeHash(){
+  if (!hashLive) return;                // never overwrite a link before it is read
+  const h = '#' + planToHash();
+  if (location.hash !== h) history.replaceState(null, '', h);
+}
+// Parse without trusting: anything malformed is dropped, not guessed at.
+function hashToPlan(hash){
+  const p = new URLSearchParams(String(hash || '').replace(/^#/, ''));
+  const r = p.get('r');
+  if (!r || !ROUTE_META[r]) return null;
+  const pair = s => { const m = /^(\d+(?:\.\d+)?)-(\d+(?:\.\d+)?)$/.exec(s || '');
+                      return m ? [+m[1], +m[2]] : null; };
+  const num = s => { const x = parseFloat(s); return isFinite(x) && x >= 0 ? x : null; };
+  const vis = (p.get('v') || r).split(',').filter(id => ROUTE_META[id]);
+  if (vis.indexOf(r) < 0) vis.push(r);
+  const types = (p.get('t') || '').split('').filter(t => TYPES[t]);
+  const locks = (p.get('l') || '').split(',').filter(Boolean).map(x => {
+    const m = /^([a-z]+\/\d+)(?::(\d{1,3}))?$/.exec(x);
+    return m ? {id: m[1], night: m[2] ? +m[2] : null} : null;
+  }).filter(Boolean);
+  return {route: r, visible: vis, start: num(p.get('s')), end: num(p.get('e')),
+          dist: pair(p.get('d')), climb: pair(p.get('c')),
+          types: types.length ? types : null, locks: locks};
+}
+// Turn parsed locks into real ones on the loaded route, applying the same
+// rules as a click: a ruin can never be a stop. A link shared before a hut
+// was marked ruined, closed or private says so instead of quietly changing.
+function applySharedLocks(sh){
+  const notes = [], rt = R[sh.route];
+  sh.locks.forEach(l => {
+    const s = rt.shelters.find(x => x.id === l.id);
+    if (!s){ notes.push('a locked stop in the link (' + esc(l.id) + ') is no longer in the data'); return; }
+    if (s.status === 'gone'){
+      notes.push('<b>' + esc(s.label) + '</b> was locked in the link but is now recorded as '
+        + 'ruined or demolished, so it was not used');
+      return;
+    }
+    if (s.status === 'closed' || s.status === 'private')
+      notes.push('<b>' + esc(s.label) + '</b> is locked in the link but recorded as '
+        + s.status + ' &mdash; check access before relying on it');
+    LOCKS.push({route: sh.route, id: s.id, km: s.km, label: s.label, type: s.type, night: l.night});
+  });
+  return notes;
+}
+function showNote(html){
+  const n = document.getElementById('note');
+  n.innerHTML = '<button title="dismiss" onclick="this.parentNode.style.display=\'none\'">×</button>' + html;
+  n.style.display = 'block';
+}
+function sharePlan(){
+  const url = location.href.split('#')[0] + '#' + planToHash();
+  if (navigator.share){
+    navigator.share({title: 'Pyrenees plan', url: url}).catch(() => {});
+    return;
+  }
+  const done = ok => {
+    const b = document.querySelector('.share-b');
+    if (b){ b.textContent = ok ? 'Link copied' : 'Copy failed - use the address bar';
+            setTimeout(() => { b.textContent = 'Share this plan'; }, 2200); }
+  };
+  if (navigator.clipboard && navigator.clipboard.writeText)
+    navigator.clipboard.writeText(url).then(() => done(true), () => done(false));
+  else done(false);
 }
 
 // --- locked stops ---------------------------------------------------------
@@ -827,6 +925,7 @@ function render(){
   document.getElementById('gpx').disabled = !(PLAN && PLAN.ok);
   const rt = R[active];
   drawLocks();
+  writeHash();                                              // the URL is always the plan
   if (window.__offlineRefresh) window.__offlineRefresh();   // section may have changed
 
   if (!PLAN){
@@ -898,7 +997,8 @@ function render(){
     + '<div class="row">↑ ' + up.toLocaleString() + ' m · '
     + PLAN.days.reduce((a,d)=>a+d.hours,0).toFixed(0) + ' h walking (Naismith)</div>'
     + '<div class="row">' + ROUTE_META[active].full + ' · km '
-    + PLAN.stops[0].km.toFixed(0) + '–' + PLAN.stops[PLAN.stops.length-1].km.toFixed(0) + '</div>';
+    + PLAN.stops[0].km.toFixed(0) + '–' + PLAN.stops[PLAN.stops.length-1].km.toFixed(0) + '</div>'
+    + '<button class="share-b" onclick="sharePlan()">Share this plan</button>';
 
   PLAN.days.forEach((d, i) => {
     const el = document.createElement('div');
@@ -1119,6 +1219,11 @@ async function ensureRoute(id){
 }
 
 (async function init(){
+  // Read a shared link before anything is drawn. Types first, because the
+  // checkboxes below are built from TYPES.
+  const shared = hashToPlan(location.hash);
+  if (shared && shared.types)
+    Object.keys(TYPES).forEach(t => { TYPES[t].on = shared.types.indexOf(t) >= 0; });
   const tbox = document.getElementById('types');
   Object.keys(TYPES).forEach(t => {
     const l = document.createElement('label');
@@ -1169,12 +1274,32 @@ async function ensureRoute(id){
   const shelterDoc = await fetch('./data/shelters.json').then(x => x.json());
   SHELTERS = shelterDoc.shelters;
   SHELTER_SOURCE = shelterDoc.source || null;
-  await ensureRoute('hrp');
-  drawRoutes(); updateToggles();
-  map.fitBounds(lines.hrp.getBounds(), {padding:[20,20]});
-  drawShelters();
-  document.getElementById('endKm').value = Math.min(150, Math.floor(R.hrp.lengthKm));
-  replan();
+  if (shared){
+    for (const id of shared.visible) await ensureRoute(id);
+    Object.keys(ROUTE_META).forEach(id => { ROUTE_META[id].on = shared.visible.indexOf(id) >= 0; });
+    active = shared.route;
+    const rt = R[active], set = (id, v) => { document.getElementById(id).value = v; };
+    const s = shared.start != null ? Math.min(shared.start, rt.lengthKm) : 0;
+    const e = shared.end != null ? Math.min(shared.end, rt.lengthKm) : Math.min(150, Math.floor(rt.lengthKm));
+    set('startKm', s); set('endKm', e > s ? e : Math.min(rt.lengthKm, s + 100));
+    if (shared.dist){ set('minKm', shared.dist[0]); set('maxKm', shared.dist[1]); }
+    if (shared.climb){ set('minAsc', shared.climb[0]); set('maxAsc', shared.climb[1]); }
+    const notes = applySharedLocks(shared);
+    drawRoutes(); updateToggles();
+    hashLive = true;
+    replan();
+    if (selLine) map.fitBounds(selLine.getBounds(), {padding:[30,30]});
+    else map.fitBounds(lines[active].getBounds(), {padding:[20,20]});
+    if (notes.length) showNote('From the shared link: ' + notes.join('; ') + '.');
+  } else {
+    await ensureRoute('hrp');
+    drawRoutes(); updateToggles();
+    map.fitBounds(lines.hrp.getBounds(), {padding:[20,20]});
+    drawShelters();
+    document.getElementById('endKm').value = Math.min(150, Math.floor(R.hrp.lengthKm));
+    hashLive = true;
+    replan();
+  }
 
   document.getElementById('go').onclick = replan;
   document.getElementById('gpx').onclick = exportGPX;

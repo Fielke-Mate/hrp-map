@@ -13,7 +13,7 @@ Ordered by risk to a hiker first, then by usefulness.
 | 3 | **Offline for the planner** — page and all route and hut data saved on first visit; map tiles saved per section with a size estimate and a hard cap; data re-checked whenever there is signal; wifi login pages can no longer overwrite saved files | The planner did not work offline at all | **done** |
 | 4 | **Phone layout** — on narrow screens everything stacks: map first at full width, then profile, then days; limits fold behind a Settings button; the key collapses | The map was 35 px wide on a 375 px phone | **done** |
 | 5 | **Your location** — GPS dot, km along the route, tonight's stop with door-to-door distance, climb along the route and time; never points at a closed or ruined hut | The planner had lost it; GPS works with no signal | **done** |
-| 6 | **Shareable plan links** — route, section, limits, types and locked stops in the URL | Send a plan to a walking partner and reopen it unchanged | |
+| 6 | **Shareable plan links** — the address always holds the plan; "Share this plan" uses the phone's share sheet or copies the link; locks to huts since marked ruined are refused and explained | Send a plan to a walking partner and reopen it unchanged | **done** |
 | 7 | **Multi-route itineraries** — switch routes at the measured junctions | Agreed earlier; the largest remaining feature | needs Q4 |
 | 8 | **Cross-check huts against refuges.info** — 368 records carry its id; it records whether a hut is usable | The strongest second source for the safety question | needs Q5 |
 | 9 | **Public-launch readiness** — disclaimer, attribution, a tile provider whose policy allows bulk offline download, a data refresh pipeline | Required before strangers rely on it | needs Q1 |
@@ -57,6 +57,7 @@ gets a human decision with a reason in `src/data/status_review.json`, and
 
 ## Done
 
+- Shareable plan links, round trip verified identical (works offline: state is in the #fragment)
 - Your location on the route, with tonight's stop (works offline)
 - Phone layout: map 375 px wide and 120 px from the top on a phone (was 35 px wide, 386 px down)
 - Offline planner, tested with the server dropping connections, answering with a
