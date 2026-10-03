@@ -14,7 +14,7 @@ earlier hand-built list of 58:
   * duplicates are detected by proximity as well as by id - two of the 58 were
     the same hut entered twice under different names
 """
-import json, math, os, sys
+import json, math, os, re, sys
 from collections import Counter, defaultdict
 
 HERE = os.path.dirname(os.path.abspath(__file__))
@@ -135,6 +135,71 @@ def dem(lat, lon):
     r, g, b = px[min(W-1, int((fx-tx)*W)), min(H-1, int((fy-ty)*H))]
     return (r*256 + g + b/256.0) - 32768.0
 
+# ---- status: is it still there, and can you get in? --------------------------
+# Classification answers "what kind of place is this". It does not answer
+# whether the place still exists or will open its door, and the tag whitelist
+# below used to discard exactly the tags that say so - a demolished refuge
+# (demolished:amenity=shelter) went out as an ordinary bare shelter.
+#
+#   gone     demolished, ruined, abandoned, or no longer accommodation
+#   closed   recorded as closed
+#   private  access=private / access=no
+#   ok       nothing recorded against it
+#
+# Only STRUCTURED tags set the status. Free-text notes and descriptions merely
+# nominate a hut for human review (status_review.json): matching keywords in
+# prose was wrong about half the time on the first pass - "the refuge is open,
+# simply closed by an iron door", "a ruined hut restored in 2019", and Viadós,
+# whose text explains when its free section opens.
+#
+# Lifecycle prefixes only count on the keys that make it somewhere to sleep:
+# disused:military on a working hut means the army left, not that the hut did.
+LIFECYCLE = ('demolished:', 'razed:', 'destroyed:', 'removed:', 'abandoned:',
+             'disused:', 'was:')
+SLEEP_VALUES = {'alpine_hut', 'wilderness_hut', 'shelter', 'hostel', 'camp_site',
+                'chalet', 'hotel', 'guest_house', 'motel', 'apartment', 'hut',
+                'cabin', 'basic_hut', 'lean_to', 'refuge'}
+GONE_WORDS = ('en ruine', 'ruiné', 'ruinée', 'détruit', 'détruite', 'effondré',
+              'effondrée', 'en ruinas', 'derruido', 'derruida', 'destroyed',
+              'collapsed', 'in ruins', 'demolished', 'démoli', 'démolie')
+CLOSED_RE = re.compile(r'(?<![\w])(fermée?s?|closed|cerrad[oa]s?|tancad?[ae]?s?|'
+                       r'clausurad[oa])(?![\w])', re.I)
+
+
+def status(t):
+    """(status, tag evidence, free-text nominations for review)"""
+    why_gone, why_closed, why_private, nominate = [], [], [], []
+    for k, v in t.items():
+        kl, vl = k.lower(), str(v).lower()
+        if kl.startswith(LIFECYCLE):
+            base = kl.split(':', 1)[1]
+            if base in ('tourism', 'amenity', 'shelter_type', 'building') and vl in SLEEP_VALUES:
+                why_gone.append('%s=%s' % (k, v))
+        if kl in ('abandoned', 'ruins', 'disused', 'demolished', 'razed') and vl == 'yes':
+            why_gone.append('%s=yes' % k)
+        if (kl, vl) in (('historic', 'ruins'), ('building', 'ruins'),
+                        ('ruins', 'building'), ('building', 'collapsed')):
+            why_gone.append('%s=%s' % (k, v))
+        if kl in ('opening_hours',) and vl.strip() in ('off', 'closed'):
+            why_closed.append('%s=%s' % (k, v))
+        if kl in ('access',) and vl in ('private', 'no'):
+            why_private.append('%s=%s' % (k, v))
+    for k in ('note', 'description', 'fixme', 'note:fr', 'note:es', 'description:fr',
+              'description:es'):
+        txt = t.get(k)
+        if not txt:
+            continue
+        low = str(txt).lower()
+        if any(w in low for w in GONE_WORDS) or CLOSED_RE.search(low):
+            nominate.append('%s: "%s"' % (k, ' '.join(str(txt).split())[:200]))
+    if why_gone:
+        return 'gone', why_gone + why_closed + why_private, nominate
+    if why_closed:
+        return 'closed', why_closed + why_private, nominate
+    if why_private:
+        return 'private', why_private, nominate
+    return 'ok', [], nominate
+
 
 # ---- build ----------------------------------------------------------------
 out, skipped = [], Counter()
@@ -164,7 +229,9 @@ for fid, e in feats.items():
         except Exception:
             pass
     ele_dem = dem(lat, lon)
+    st, st_why, st_review = status(t)
     rec = dict(id=fid, name=t.get('name'), type=typ, confidence=conf,
+               status=st, statusWhy=st_why, reviewNotes=st_review,
                ll=[round(lat, 6), round(lon, 6)],
                ele=ele_osm if ele_osm is not None else (round(ele_dem) if ele_dem else None),
                eleSource='osm' if ele_osm is not None else ('dem' if ele_dem else None),
@@ -175,10 +242,15 @@ for fid, e in feats.items():
                tags={k: v for k, v in t.items()
                      if k in ('tourism', 'amenity', 'shelter_type', 'building',
                               'ele', 'capacity', 'operator', 'access', 'fee',
-                              'seasonal', 'opening_hours', 'ref:refuges.info')})
+                              'seasonal', 'opening_hours', 'ref:refuges.info',
+                              'historic', 'ruins', 'abandoned', 'disused', 'note',
+                              'description')
+                     or k.lower().startswith(LIFECYCLE)})
     out.append(rec)
 
 print('kept %d, skipped %s' % (len(out), dict(skipped)))
 json.dump(out, open(os.path.join(CACHE, 'projected.json'), 'w'))
 print('\nby type: %s' % dict(Counter(r['type'] for r in out)))
 print('by confidence: %s' % dict(Counter(r['confidence'] for r in out)))
+print('by status: %s' % dict(Counter(r['status'] for r in out)))
+print('nominated for review by free text: %d' % sum(1 for r in out if r['reviewNotes']))

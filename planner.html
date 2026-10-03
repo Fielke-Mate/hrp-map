@@ -93,6 +93,13 @@ button:disabled{opacity:.4;cursor:default}
 .lk-b:hover{border-color:#4a9fd0}
 .badge.locked{box-shadow:0 0 0 2px #ffd060,0 0 5px #000a}
 .badge.faint{opacity:.48}
+.badge.st-gone{filter:grayscale(1);opacity:.6;text-decoration:line-through;border-style:dashed}
+.badge.st-shut{box-shadow:0 0 0 2px #e05050,0 0 4px #000a}
+.st{margin:5px 0 0;padding:4px 6px;border-radius:4px;font-size:11px;line-height:1.35}
+.st.gone{background:#3a1416;color:#ffb0b0;border:1px solid #7a2a2e}
+.st.shut{background:#3a2a10;color:#ffd590;border:1px solid #7a5a20}
+.st.cav{background:#2e2a12;color:#ffe9a0;border:1px solid #5e5420}
+.st code{font-size:10px;color:#c9a9a9}
 </style>
 </head>
 <body>
@@ -255,8 +262,15 @@ function autoPlan(rt, startKm, endKm, opts){
   const lockIds = new Set(locks.map(l => l.id));
   // A locked stop is honoured even if its type is switched off or it lies
   // beyond the detour limit: the user asked for it by name.
+  // Never choose a night at a hut recorded as closed or private, and never at
+  // one that is ruined or demolished - even when asked: a lock can pick a
+  // closed or private hut (the hiker may know the shepherd), but not a ruin.
+  // A record without a status predates the check and is treated as usable.
+  const usable = s => !s.status || s.status === 'ok';
   const cand = rt.shelters.filter(s => s.km > startKm + 0.3 && s.km < endKm - 0.3
-                                  && ((opts.types.has(s.type) && s.offM <= opts.maxOffM)
+                                  && s.status !== 'gone'
+                                  && ((opts.types.has(s.type) && s.offM <= opts.maxOffM
+                                       && usable(s))
                                       || lockIds.has(s.id)));
   const nodes = [{km:startKm, offM:0, label:'Start', type:null}]
     .concat(cand).concat([{km:endKm, offM:0, label:'Finish', type:null}]);
@@ -414,7 +428,7 @@ function toggleLock(id, night){
   if (i >= 0) LOCKS.splice(i, 1);
   else {
     const s = (R[active] || {shelters:[]}).shelters.find(x => x.id === id);
-    if (!s) return;
+    if (!s || s.status === 'gone') return;      // a ruin is never a stop
     LOCKS.push({route:active, id:id, km:s.km, label:s.label, type:s.type,
                 night:(night == null ? null : +night)});
   }
@@ -459,10 +473,12 @@ function drawLocks(){
 }
 
 // --- rendering ------------------------------------------------------------
-function badge(t, locked, faint){
+function badge(t, locked, faint, status){
   const s = TYPES[t] || TYPES.A;
+  const st = status === 'gone' ? ' st-gone'
+           : (status === 'closed' || status === 'private') ? ' st-shut' : '';
   return L.divIcon({className:'', iconSize:[19,19], iconAnchor:[9.5,9.5],
-    html:'<div class="badge' + (locked ? ' locked' : '') + (faint ? ' faint' : '')
+    html:'<div class="badge' + (locked ? ' locked' : '') + (faint ? ' faint' : '') + st
          + '" style="background:'+s.bg
          +';border-color:'+s.bd+';color:'+s.fg+'">'+t+'</div>'});
 }
@@ -498,6 +514,28 @@ function drawRoutes(){
       selLine = L.polyline(seg, {color:ROUTE_META[active].colour, weight:6, opacity:1}).addTo(map);
     }
   }
+}
+
+// What a hiker must know about a hut before relying on it, worded for the
+// trail. statusWhy entries are either a reviewed reason or the OSM tag that
+// decided it; both are shown so the judgement can be checked, not just taken.
+function statusNote(s){
+  const why = (s.statusWhy || []).map(w => {
+    const m = w.match(/^reviewed (\S+): (.*)$/);
+    return m ? esc(m[2]) + ' <code>(reviewed ' + m[1] + ')</code>' : '<code>' + esc(w) + '</code>';
+  }).join('<br>');
+  if (s.status === 'gone')
+    return '<div class="st gone"><b>Not a place to sleep</b> — reported ruined, demolished or '
+      + 'abandoned. The planner will never use it.' + (why ? '<br>' + why : '') + '</div>';
+  if (s.status === 'closed')
+    return '<div class="st shut"><b>Reported closed</b> — the planner will not choose it. '
+      + 'Lock it only if you know it is open.' + (why ? '<br>' + why : '') + '</div>';
+  if (s.status === 'private')
+    return '<div class="st shut"><b>Private</b> — not open to the public, so the planner will '
+      + 'not choose it.' + (why ? '<br>' + why : '') + '</div>';
+  if (s.caveat)
+    return '<div class="st cav">⚠ ' + esc(s.caveat) + '</div>';
+  return '';
 }
 
 function drawShelters(){
@@ -549,7 +587,7 @@ function drawShelters(){
   items.forEach(e => {
     const s = e.s, lk = lockOf(s.id), focus = inFocus(e);
     const mine = e.on.some(o => o.route === active);
-    L.marker(s.ll, {icon: badge(s.type, !!lk, !focus && !lk)})
+    L.marker(s.ll, {icon: badge(s.type, !!lk, !focus && !lk, s.status)})
      .bindPopup('<h4>' + esc(s.label) + '</h4><p class="m">'
        + (TYPES[s.type] ? TYPES[s.type].label : s.type)
        + (s.ele ? ' · ' + s.ele + ' m' : '')
@@ -560,9 +598,11 @@ function drawShelters(){
        + (s.confidence !== 'high' ? '<br><i>classified from incomplete tags ('
            + s.confidence + ' confidence)</i>' : '')
        + '<br><span style="color:#6a8398">' + esc(s.id) + '</span></p>'
+       + statusNote(s)
        // Locking works against the route being planned, so offer it only there
-       // rather than leaving a button that silently does nothing.
-       + (mine
+       // rather than leaving a button that silently does nothing - and never
+       // for a ruin.
+       + (s.status === 'gone' ? '' : mine
           ? '<p style="margin:5px 0 0"><button class="lk-b' + (lk ? ' on' : '')
             + '" onclick="toggleLock(\'' + s.id + '\')">'
             + (lk ? 'unlock this stop' : 'lock as a stop') + '</button></p>'
@@ -809,6 +849,9 @@ function render(){
       + (d.detour > 0.05 ? '<br><span style="color:#ffcf90">includes '
           + (d.detour*1000).toFixed(0) + ' m off route</span>' : '')
       + (d.to.ele ? '<br>' + d.to.ele + ' m · km ' + d.to.km.toFixed(1) : '')
+      // a locked stop may be closed or private; an ordinary one may carry a
+      // caveat - either way the hiker reads it here, not only in a popup
+      + (d.to.id ? statusNote(d.to) : '')
       + (d.to.id ? '<br><button class="lk-b' + (lockOf(d.to.id) ? ' on' : '')
           + '" onclick="event.stopPropagation();toggleLock(\'' + d.to.id + '\','
           + (i+1) + ')">' + (lockOf(d.to.id) ? 'locked to night ' + (i+1)
@@ -821,7 +864,7 @@ function render(){
   PLAN.stops.forEach((s, i) => {
     if (!s.type) return;
     const lk = lockOf(s.id);
-    L.marker(s.ll || llAtKm(rt, s.km), {icon:badge(s.type, !!lk), zIndexOffset:600})
+    L.marker(s.ll || llAtKm(rt, s.km), {icon:badge(s.type, !!lk, false, s.status), zIndexOffset:600})
      .bindPopup('<h4>Night ' + i + ' — ' + esc(s.label) + '</h4>'
        + '<p style="margin:5px 0 0"><button class="lk-b' + (lk ? ' on' : '')
        + '" onclick="toggleLock(\'' + s.id + '\',' + i + ')">'
@@ -995,6 +1038,8 @@ async function ensureRoute(id){
     const o = s.on.find(o => o.route === id);
     if (o) shelters.push({id:s.id, label:s.label, type:s.type, ele:s.ele,
                           capacity:s.capacity, confidence:s.confidence,
+                          status:s.status || 'ok', statusWhy:s.statusWhy || [],
+                          caveat:s.caveat || null,
                           ll:s.ll, km:o.km, offM:o.offM});
   });
   shelters.sort((a,b) => a.km - b.km);
@@ -1015,7 +1060,11 @@ async function ensureRoute(id){
   });
   document.getElementById('legend').innerHTML = Object.keys(TYPES).map(t =>
     '<div><span class="badge" style="background:' + TYPES[t].bg + ';border-color:' + TYPES[t].bd
-    + ';color:' + TYPES[t].fg + '">' + t + '</span> ' + TYPES[t].label + '</div>').join('');
+    + ';color:' + TYPES[t].fg + '">' + t + '</span> ' + TYPES[t].label + '</div>').join('')
+    + '<div><span class="badge st-shut" style="background:' + TYPES.C.bg + ';border-color:'
+    + TYPES.C.bd + ';color:' + TYPES.C.fg + '">C</span> closed or private</div>'
+    + '<div><span class="badge st-gone" style="background:' + TYPES.C.bg + ';border-color:'
+    + TYPES.C.bd + ';color:' + TYPES.C.fg + '">C</span> ruined / demolished</div>';
 
   const tg = document.getElementById('routeToggles');
   Object.keys(ROUTE_META).forEach(id => {

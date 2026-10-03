@@ -15,6 +15,9 @@
 //   * a lock is honoured even with its type switched off or beyond the
 //     detour limit, because the user named it
 //   * the extra night dimension does not make a whole-route plan slow
+//   * a hut recorded as ruined, demolished, closed or private is never chosen
+//     by the planner; a closed or private one can still be locked by name,
+//     a ruin cannot
 const fs = require('fs'), path = require('path');
 const SITE = path.dirname(__dirname);
 const html = fs.readFileSync(path.join(SITE, 'planner.html'), 'utf8');
@@ -45,6 +48,7 @@ function load(id){
     const o = s.on.find(o => o.route === id);
     if (o) shelters.push({id:s.id, label:s.label, type:s.type, ele:s.ele,
                           capacity:s.capacity, confidence:s.confidence,
+                          status:s.status || 'ok', statusWhy:s.statusWhy || [],
                           ll:s.ll, km:o.km, offM:o.offM});
   });
   shelters.sort((a,b) => a.km - b.km);
@@ -79,8 +83,11 @@ check('every day within limits',
 console.log('\n2. an unpinned lock is always visited');
 // pick a hut the base plan did NOT choose, inside the range
 const chosen = new Set(base.stops.map(s => s.id));
+// the lock tests are about locking, so they draw only from usable huts -
+// section 12 covers what happens with ruined, closed and private ones
 const notChosen = hrp.shelters.filter(s => s.km > 20 && s.km < 130 && !chosen.has(s.id)
-                                        && DEF.types.has(s.type) && s.offM <= 2500);
+                                        && DEF.types.has(s.type) && s.offM <= 2500
+                                        && s.status === 'ok');
 check('found unchosen candidates', notChosen.length > 0, notChosen.length + ' of them');
 let visited = 0, broke = 0, infeasible = 0;
 const sample = notChosen.filter((_, i) => i % 7 === 0).slice(0, 40);
@@ -167,7 +174,8 @@ const pairs = [];
 for (let i = 1; i < hrp.shelters.length; i++){
   const a = hrp.shelters[i-1], b = hrp.shelters[i];
   if (a.km > 20 && b.km < 130 && b.km - a.km < 5 && b.km - a.km > 1
-      && DEF.types.has(a.type) && DEF.types.has(b.type)) pairs.push([a,b]);
+      && DEF.types.has(a.type) && DEF.types.has(b.type)
+      && a.status === 'ok' && b.status === 'ok') pairs.push([a,b]);
 }
 if (pairs.length){
   const [a,b] = pairs[0];
@@ -205,7 +213,7 @@ console.log('\n9. the same on GR11 and GR10');
     p.ok ? p.days.length + ' days' : p.kind);
   // and an unpinned lock on something it did not choose
   const nc = rt.shelters.find(s => s.km > 30 && s.km < 170 && !b.stops.some(x=>x.id===s.id)
-                                && DEF.types.has(s.type) && s.offM <= 2500);
+                                && DEF.types.has(s.type) && s.offM <= 2500 && s.status === 'ok');
   if (nc){
     const q = autoPlan(rt, 0, 200, o({locks:[{route:id, id:nc.id, km:nc.km, label:nc.label, night:null}]}));
     check(id + ' unpinned lock visited', !q.ok || q.stops.some(x=>x.id===nc.id),
@@ -236,6 +244,48 @@ check('day distances sum to the section plus detours',
   }));
 check('no day exceeds the limits',
   plans.every(p => p.days.every(d => d.km <= DEF.maxKm + 1e-9 && d.up <= DEF.maxAsc)));
+
+// =========================================================== 12. hut status
+// Before this rule, 104 of 452 feasible plans in a sweep stopped at a hut that
+// is ruined, closed or private - among them a demolished refuge and one
+// closed for good in August 2026. This is the property that must never regress.
+console.log('\n12. ruined, closed and private huts are never planned');
+const NOT_OK = new Set(['gone', 'closed', 'private']);
+let planned = 0, offenders = [];
+[['hrp',hrp],['gr10',gr10],['gr11',gr11]].forEach(([id, rt]) => {
+  for (let a = 0; a + 60 <= rt.lengthKm; a += 45){
+    [[10,20,1600],[8,25,2000],[6,14,1000]].forEach(([mn, mx, asc]) => {
+      const p = autoPlan(rt, a, Math.min(rt.lengthKm, a + 150),
+                         o({minKm:mn, maxKm:mx, maxAsc:asc,
+                            types:new Set(['R','C','A','G','B','H'])}));
+      if (!p.ok) return;
+      planned++;
+      p.stops.forEach(s => { if (NOT_OK.has(s.status)) offenders.push(id + ' ' + s.label + ' (' + s.status + ')'); });
+    });
+  }
+});
+check('no auto-planned stop is ruined, closed or private', offenders.length === 0,
+  planned + ' plans, every type allowed' + (offenders.length ? ' - ' + offenders.slice(0,3).join(', ') : ''));
+
+const anyRt = [hrp, gr10, gr11];
+const findStatus = st => { for (const rt of anyRt){ const s = rt.shelters.find(x => x.status === st
+                             && x.km > 15 && x.km < rt.lengthKm - 15); if (s) return [rt, s]; } };
+const [gRt, gone] = findStatus('gone') || [];
+if (gone){
+  const p = autoPlan(gRt, gone.km - 14, gone.km + 14,
+    o({locks:[{route:gRt.id, id:gone.id, km:gone.km, label:gone.label, night:null}],
+       types:new Set(['R','C','A','G','B','H'])}));
+  check('a ruin cannot be planned even when locked',
+    !(p.ok && p.stops.some(s => s.id === gone.id)), gone.label);
+} else console.log('  --    no ruined hut found, skipped');
+const [cRt, shut] = findStatus('closed') || [];
+if (shut){
+  const p = autoPlan(cRt, shut.km - 12, shut.km + 12,
+    o({locks:[{route:cRt.id, id:shut.id, km:shut.km, label:shut.label, night:null}],
+       minKm:2, types:new Set(['R','C','A','G','B','H'])}));
+  check('a closed hut can still be locked by a hiker who knows it is open',
+    p.ok && p.stops.some(s => s.id === shut.id), shut.label + (p.ok ? '' : ' - ' + p.kind));
+} else console.log('  --    no closed hut found, skipped');
 
 // =========================================================== 11. performance
 console.log('\n11. cost of the extra dimension');

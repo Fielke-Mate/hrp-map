@@ -15,7 +15,7 @@ Three corrections the verification pass showed are needed:
   526 records have no name. A planner that says "sleep at (unnamed)" is not
   useful, so they get a descriptive label built from what is known.
 """
-import json, math, os
+import json, math, os, sys
 from collections import defaultdict, Counter
 
 HERE = os.path.dirname(os.path.abspath(__file__))
@@ -34,13 +34,23 @@ def gc(a, b):
     return math.sqrt(dlat*dlat + dlon*dlon)
 
 
+# The tag keys that existed before status evidence was kept. Evidence keys
+# (note, description, historic, lifecycle prefixes) were added to the record
+# so a status can be re-examined; counting them here changed which duplicate
+# won a merge, and so silently changed the id, name and position of huts that
+# had nothing to do with the status work.
+SCORED_TAGS = {'tourism', 'amenity', 'shelter_type', 'building', 'ele', 'capacity',
+               'operator', 'access', 'fee', 'seasonal', 'opening_hours',
+               'ref:refuges.info'}
+
+
 def score(r):
     """how much this record is worth keeping as the primary of a merged pair"""
     s = 0
     if r['name']:
         s += 100
     s += RICHNESS.get(r['confidence'], 0) * 10
-    s += len(r['tags'])
+    s += sum(1 for k in r['tags'] if k in SCORED_TAGS)
     if r['eleSource'] == 'osm':
         s += 2
     if r['capacity']:
@@ -84,8 +94,19 @@ for i in range(len(recs)):
 
 merged = []
 merge_count = 0
+STATUS_RANK = {'gone': 3, 'closed': 2, 'private': 1, 'ok': 0}
+superseded = 0
 for _, idxs in groups.items():
     members = [recs[i] for i in idxs]
+    # A demolished hut next to a working one is usually its predecessor - the
+    # old refuge knocked down and a new one built beside it. Letting the dead
+    # record's status win the merge would refuse the hut that is actually
+    # there, so it leaves the group and is remembered as what it was.
+    live = [m for m in members if m.get('status') != 'gone']
+    dead = [m for m in members if m.get('status') == 'gone']
+    if live and dead:
+        superseded += len(dead)
+        members = live
     if len(members) > 1:
         merge_count += len(members) - 1
     members.sort(key=score, reverse=True)
@@ -100,6 +121,11 @@ for _, idxs in groups.items():
                 primary['capacity'] = m['capacity']
             if not primary['operator'] and m['operator']:
                 primary['operator'] = m['operator']
+        # closed or private on any record of the same building wins
+        worst = max(members, key=lambda m: STATUS_RANK.get(m.get('status', 'ok'), 0))
+        primary['status'] = worst.get('status', 'ok')
+        primary['statusWhy'] = sorted({w for m in members for w in m.get('statusWhy', [])})
+        primary['reviewNotes'] = sorted({w for m in members for w in m.get('reviewNotes', [])})
         # a merged group takes the most cautious type present
         order = ['A', 'C', 'B', 'G', 'R', 'H']
         types = [m['type'] for m in members]
@@ -111,9 +137,48 @@ for _, idxs in groups.items():
                 if o['route'] not in byroute or o['offM'] < byroute[o['route']]['offM']:
                     byroute[o['route']] = o
         primary['on'] = sorted(byroute.values(), key=lambda o: o['offM'])
+    if live and dead:
+        primary['supersedes'] = [{'id': m['id'], 'name': m.get('name'),
+                                  'why': m.get('statusWhy', [])} for m in dead]
     merged.append(primary)
 
 print('merged %d duplicate records: %d -> %d' % (merge_count, len(recs), len(merged)))
+print('demolished/ruined predecessors folded into a live neighbour: %d' % superseded)
+
+# ---- 1b. human review of free-text warnings -------------------------------
+# A nomination with no decision stops the build. Shipping it unreviewed would
+# mean either trusting a keyword match (wrong half the time) or ignoring a
+# note that says a refuge closed for good - both unacceptable for data that
+# hikers will plan nights around.
+review = json.load(open(os.path.join(HERE, 'status_review.json'), encoding='utf-8'))
+decisions = review['decisions']
+used, unreviewed = set(), []
+for r in merged:
+    ids = [r['id']] + list(r.get('mergedFrom', []))
+    key = next((i for i in ids if i in decisions), None)
+    if key:
+        d = decisions[key]
+        used.add(key)
+        r['status'] = d['status']
+        r['statusWhy'] = ['reviewed %s: %s' % (review['reviewed'], d['reason'])] + \
+                         [w for w in r.get('statusWhy', []) if not w.startswith('reviewed')]
+        if d.get('caveat'):
+            r['caveat'] = d['caveat']
+    elif r.get('reviewNotes'):
+        unreviewed.append(r)
+    r.pop('reviewNotes', None)
+stale = sorted(set(decisions) - used)
+if stale:
+    print('WARNING: %d review decisions match no record (renamed or deleted in OSM?): %s'
+          % (len(stale), ', '.join(stale)))
+if unreviewed:
+    print('\nREFUSING TO WRITE: %d huts carry a free-text warning nobody has reviewed.'
+          % len(unreviewed))
+    for r in unreviewed:
+        print('  %-20s %s' % (r['id'], r.get('name') or '(unnamed)'))
+    print('Read each description and add a decision to src/data/status_review.json.')
+    sys.exit(1)
+print('free-text warnings reviewed: %d decisions applied' % len(used))
 
 # ---- 2. elevation ---------------------------------------------------------
 fixed = 0
@@ -167,4 +232,5 @@ json.dump(doc, open(out, 'w', encoding='utf-8'), separators=(',', ':'),
 print('\nwrote %s  %.2f MB' % (out, os.path.getsize(out)/1048576))
 print('by type      : %s' % dict(Counter(r['type'] for r in merged)))
 print('by confidence: %s' % dict(Counter(r['confidence'] for r in merged)))
+print('by status    : %s' % dict(Counter(r.get('status', 'ok') for r in merged)))
 print('named        : %d of %d' % (sum(1 for r in merged if r['name']), len(merged)))
