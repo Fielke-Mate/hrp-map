@@ -97,6 +97,17 @@ button:disabled{opacity:.4;cursor:default}
 .lk-b:hover{border-color:#4a9fd0}
 .badge.locked{box-shadow:0 0 0 2px #ffd060,0 0 5px #000a}
 .badge.faint{opacity:.48}
+#geo-chip{background:#1a2d3f;border:1px solid #2a4060;border-radius:8px;padding:5px 10px;
+  color:#7ad0f0;font-size:10.5px;font-weight:700;cursor:pointer;box-shadow:0 2px 8px #0009;
+  user-select:none;text-align:center;margin-bottom:6px}
+#geo-chip.on{background:#1e4a6b;color:#cfe8ff;border-color:#3a7ca8}
+#geo-out{background:#1a2d3f;border:1px solid #2a4060;border-radius:8px;padding:6px 10px;
+  color:#d0e0f0;font-size:10.5px;line-height:1.55;width:250px;box-shadow:0 2px 8px #0009;
+  margin-bottom:6px;display:none;cursor:pointer}
+#geo-out b{color:#7ad0f0}
+#geo-out .warn{color:#ffcf90}
+.geo-dot{width:16px;height:16px;border-radius:50%;background:#2e9bff;border:3px solid #fff;
+  box-shadow:0 0 0 1px #0006,0 0 10px #2e9bff}
 #off-chip{background:#1a2d3f;border:1px solid #2a4060;border-radius:8px;padding:5px 10px;
   color:#7ad0f0;font-size:10.5px;font-weight:700;cursor:pointer;box-shadow:0 2px 8px #0009;
   user-select:none;text-align:center}
@@ -1198,6 +1209,159 @@ async function ensureRoute(id){
   };
   L.DomEvent.disableClickPropagation(legend);
   window.__plannerReady = true;
+})();
+
+// ---------------------------------------------------------------------------
+// Your location.
+//
+// GPS needs no signal, and the planner now works without one, so this is the
+// on-trail view: where you are along the route and what is left of today.
+// The position never leaves the device - nothing here sends it anywhere.
+//
+// Carried over from the original tool, each from a real failure: browsers only
+// release GPS in a secure context (opening the page from Android's Downloads
+// list hands Chrome a content:// URI and the request dies silently), so that is
+// checked up front; a timeout keeps retrying, a refusal does not.
+//
+// Improved on it: distance to the next stop includes your own walk back to the
+// route and the detour to the hut, and the climb is the ascent ALONG the route,
+// not the height difference - a hut 200 m below you can still be 800 m of
+// climbing away. Only huts with nothing recorded against them are suggested.
+// ---------------------------------------------------------------------------
+(function(){
+  let watching = false, firstFix = true, dot = null, ring = null, last = null;
+  const ON_ROUTE_M = 60, LOST_KM = 2;
+
+  const ctl = L.control({position:'topright'});
+  ctl.onAdd = function(){
+    const w = L.DomUtil.create('div');
+    w.innerHTML = '<div id="geo-chip" title="Show where you are on the route (uses GPS, works with no signal)">'
+                + '&#9678; My location</div><div id="geo-out" title="Tap to centre the map on you"></div>';
+    L.DomEvent.disableClickPropagation(w);
+    return w;
+  };
+  ctl.addTo(map);
+  const chip = document.getElementById('geo-chip'), out = document.getElementById('geo-out');
+
+  function say(html, warn){
+    out.style.display = 'block';
+    out.innerHTML = warn ? '<span class="warn">' + html + '</span>' : html;
+  }
+  function setChip(on, label){ chip.classList.toggle('on', on); chip.innerHTML = label; }
+
+  function stop(){
+    watching = false; firstFix = true; last = null;
+    map.stopLocate();
+    if (dot){ map.removeLayer(dot); dot = null; }
+    if (ring){ map.removeLayer(ring); ring = null; }
+    setChip(false, '&#9678; My location');
+    out.style.display = 'none';
+  }
+
+  function start(){
+    if (!navigator.geolocation){ say('This browser has no location support.', true); return; }
+    if (window.isSecureContext === false){
+      say('Blocked: the browser only gives out GPS to pages opened over <b>https</b>. '
+        + 'Open the planner from its web address rather than a downloaded file.', true);
+      return;
+    }
+    watching = true; firstFix = true;
+    setChip(true, '&#9678; Locating&hellip;');
+    say('Waiting for a GPS fix&hellip; about 30 s in the open, longer in a deep valley.');
+    map.locate({watch:true, enableHighAccuracy:true, timeout:30000, maximumAge:10000, setView:false});
+  }
+
+  chip.addEventListener('click', () => { watching ? stop() : start(); });
+  out.addEventListener('click', () => { if (last) map.setView(last, Math.max(map.getZoom(), 14)); });
+
+  function fmtKm(k){ return k < 1 ? Math.round(k * 1000) + ' m' : k.toFixed(1) + ' km'; }
+
+  // Pure: what to tell a hiker standing at ll. Kept separate from the GPS
+  // plumbing so it reads as the rules it applies.
+  function readout(ll, accM, altM){
+    const rt = R[active];
+    if (!rt) return 'No route loaded.';
+    const me = nearestKmOn(rt, ll);
+    const name = ROUTE_META[active].name;
+    if (me.off > LOST_KM){
+      // Far from the route being planned - say which visible route is nearest
+      // rather than claiming a km position that means nothing.
+      let near = null;
+      Object.keys(ROUTE_META).forEach(id => {
+        if (id === active || !ROUTE_META[id].on || !R[id]) return;
+        const h = nearestKmOn(R[id], ll);
+        if (!near || h.off < near.off) near = {id: id, km: h.km, off: h.off};
+      });
+      return '<span class="warn">' + fmtKm(me.off) + ' from the ' + name + '</span>'
+        + (near && near.off < me.off ? '<br>Nearest shown route: <b>' + ROUTE_META[near.id].name
+             + '</b> km ' + near.km.toFixed(1) + ', ' + fmtKm(near.off) + ' away' : '')
+        + '<br>GPS &plusmn;' + Math.round(accM) + ' m';
+    }
+    const ele = (altM != null && isFinite(altM)) ? Math.round(altM) : Math.round(eleAtKm(rt, me.km));
+    let html = '<b>' + name + ' km ' + me.km.toFixed(1) + '</b> &middot; ' + ele + ' m<br>'
+      + (me.off * 1000 <= ON_ROUTE_M ? 'On the route'
+                                     : '<span class="warn">' + fmtKm(me.off) + ' off the route</span>')
+      + ' &middot; GPS &plusmn;' + Math.round(accM) + ' m';
+
+    // Tonight's stop if a plan covers where you are; otherwise the next usable
+    // place to sleep of a type you have switched on.
+    let target = null, label = 'Next place to sleep';
+    const inPlan = PLAN && PLAN.ok && PLAN.stops[0].km <= me.km + 0.05
+                   && me.km < PLAN.stops[PLAN.stops.length - 1].km;
+    if (inPlan){
+      const i = PLAN.stops.findIndex((s, k) => k > 0 && s.km > me.km + 0.15);
+      if (i > 0){
+        target = PLAN.stops[i];
+        label = target.type ? 'Tonight (night ' + i + ')' : 'Finish';
+      }
+    } else {
+      const on = new Set(Object.keys(TYPES).filter(t => TYPES[t].on));
+      target = rt.shelters.find(s => s.km > me.km + 0.15 && on.has(s.type)
+                                     && (!s.status || s.status === 'ok'));
+    }
+    if (!target) return html + '<br>Nothing further along the ' + name + '.';
+
+    // door to door: back to the route, along it, out to the hut
+    const along = target.km - me.km, detour = (target.offM || 0) / 1000;
+    const dKm = me.off + along + detour;
+    const asc = ascentBetween(rt, me.km, target.km);
+    const hours = dKm / 4 + asc.up / 600;                   // Naismith, as the day cards
+    return html + '<br><b>' + label + ':</b> ' + esc(target.label)
+      + '<br>' + (me.off + detour > 0.1 ? '&asymp;' : '') + fmtKm(dKm)
+      + ' &middot; &uarr;' + asc.up + ' m &darr;' + asc.dn + ' m &middot; ~'
+      + (hours < 1 ? Math.round(hours * 60) + ' min' : hours.toFixed(1) + ' h')
+      + (target.caveat ? '<br><span class="warn">&#9888; ' + esc(target.caveat) + '</span>' : '');
+  }
+
+  map.on('locationfound', e => {
+    if (!watching) return;
+    last = e.latlng;
+    const acc = e.accuracy || 0;
+    if (!dot){
+      ring = L.circle(e.latlng, {radius:acc, color:'#2e9bff', weight:1, fillColor:'#2e9bff',
+                                 fillOpacity:0.12, interactive:false}).addTo(map);
+      dot = L.marker(e.latlng, {icon:L.divIcon({className:'', iconSize:[16,16], iconAnchor:[8,8],
+                                html:'<div class="geo-dot"></div>'}), zIndexOffset:1000,
+                                interactive:false}).addTo(map);
+    } else {
+      dot.setLatLng(e.latlng);
+      ring.setLatLng(e.latlng).setRadius(acc);
+    }
+    if (firstFix){ map.setView(e.latlng, Math.max(map.getZoom(), 14)); firstFix = false; }
+    setChip(true, '&#9678; Tracking &middot; tap to stop');
+    say(readout([e.latlng.lat, e.latlng.lng], acc, e.altitude));
+  });
+
+  map.on('locationerror', e => {
+    if (!watching) return;
+    const c = e.code;     // 1 permission denied, 2 unavailable, 3 timeout
+    say(c === 1 ? 'Location permission was refused. Allow it for this site in the browser settings '
+                  + '(on iPhone: Settings &rarr; Privacy &rarr; Location Services).'
+      : c === 2 ? 'No position available. Check that location services are on.'
+      : c === 3 ? 'Still waiting for a fix &mdash; step into the open and give it a minute.'
+      : (e.message || 'Location failed.'), true);
+    if (c !== 3){ watching = false; map.stopLocate(); setChip(false, '&#9678; My location'); }
+  });
 })();
 
 // ---------------------------------------------------------------------------

@@ -12,7 +12,7 @@ Ordered by risk to a hiker first, then by usefulness.
 | 2 | **Access points** — stations, bus stations and airports, with distance to the trail; click one to start or finish there | Your idea: plan from where the train arrives | needs Q6–Q10 |
 | 3 | **Offline for the planner** — page and all route and hut data saved on first visit; map tiles saved per section with a size estimate and a hard cap; data re-checked whenever there is signal; wifi login pages can no longer overwrite saved files | The planner did not work offline at all | **done** |
 | 4 | **Phone layout** — on narrow screens everything stacks: map first at full width, then profile, then days; limits fold behind a Settings button; the key collapses | The map was 35 px wide on a 375 px phone | **done** |
-| 5 | **Your location** — GPS dot, distance along the route to the next stop | The first feature this project had; the planner lost it | |
+| 5 | **Your location** — GPS dot, km along the route, tonight's stop with door-to-door distance, climb along the route and time; never points at a closed or ruined hut | The planner had lost it; GPS works with no signal | **done** |
 | 6 | **Shareable plan links** — route, section, limits, types and locked stops in the URL | Send a plan to a walking partner and reopen it unchanged | |
 | 7 | **Multi-route itineraries** — switch routes at the measured junctions | Agreed earlier; the largest remaining feature | needs Q4 |
 | 8 | **Cross-check huts against refuges.info** — 368 records carry its id; it records whether a hut is usable | The strongest second source for the safety question | needs Q5 |
@@ -57,6 +57,7 @@ gets a human decision with a reason in `src/data/status_review.json`, and
 
 ## Done
 
+- Your location on the route, with tonight's stop (works offline)
 - Phone layout: map 375 px wide and 120 px from the top on a phone (was 35 px wide, 386 px down)
 - Offline planner, tested with the server dropping connections, answering with a
   wifi login page, returning 503, and a service-worker update installing behind a
