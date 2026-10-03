@@ -120,12 +120,43 @@ button:disabled{opacity:.4;cursor:default}
 .st.shut{background:#3a2a10;color:#ffd590;border:1px solid #7a5a20}
 .st.cav{background:#2e2a12;color:#ffe9a0;border:1px solid #5e5420}
 .st code{font-size:10px;color:#c9a9a9}
+#ctlToggle{display:none}
+#legend .lg-h{display:none}
+/* --- phones --------------------------------------------------------------
+   Side by side, the 340 px day list left the map 35 px wide on a 375 px
+   screen: no map at all. On a phone everything stacks into one scrolling
+   page, map first, and the limits - set once, rarely touched - fold away
+   behind a button so the map starts near the top of the screen. */
+@media (max-width:760px){
+  #top{padding:7px 10px;gap:7px}
+  h1{font-size:14px;flex:1 1 auto}
+  #ctlToggle{display:inline-block;padding:5px 10px;font-size:11.5px}
+  #routeToggles{order:3;width:100%}
+  .rt{flex:1;text-align:center;padding:7px 4px}
+  #pickState{order:4;margin-left:0;width:100%}
+  #controls{display:none;padding:8px 10px;gap:9px 11px}
+  body.ctl-open #controls{display:flex}
+  #main{flex-direction:column;height:auto;min-height:0}
+  #map{flex:none;height:58vh;min-height:280px}
+  #elev{height:112px}
+  #side{width:auto;border-left:none;border-top:1px solid #1e3247;overflow:visible}
+  #legend{padding:4px 8px}
+  #legend .lg-h{display:block;cursor:pointer;font-weight:600;color:#9ab8d0}
+  #legend:not(.open) div:not(.lg-h){display:none}
+  #off-panel{width:min(250px,78vw)}
+  /* The map credit wraps to two lines at this width and sat on top of the key
+     and the shelter count. It is a licence condition, so it stays readable -
+     just smaller - and the two boxes move up clear of it. */
+  .leaflet-control-attribution{font-size:9px;line-height:1.3}
+  #legend,#zoomhint{bottom:34px}
+}
 </style>
 </head>
 <body>
 
 <div id="top">
   <h1>Pyrenees traverse planner</h1>
+  <button id="ctlToggle" class="sec" aria-expanded="false" aria-controls="controls">Settings</button>
   <div id="routeToggles"></div>
   <div id="pickState">Click near a route to set your <b>start</b></div>
 </div>
@@ -879,8 +910,14 @@ function render(){
           + (i+1) + ')">' + (lockOf(d.to.id) ? 'locked to night ' + (i+1)
                                              : 'keep as night ' + (i+1)) + '</button>' : '')
       + '</div>';
-    el.onclick = () => map.fitBounds(
-      L.latLngBounds(llAtKm(rt, d.from.km), llAtKm(rt, d.to.km)), {padding:[45,45]});
+    el.onclick = () => {
+      map.fitBounds(L.latLngBounds(llAtKm(rt, d.from.km), llAtKm(rt, d.to.km)), {padding:[45,45]});
+      // On a phone the map sits above the list and may be scrolled out of
+      // sight; zooming it there would look like the tap did nothing.
+      const box = document.getElementById('map').getBoundingClientRect();
+      if (box.bottom < 60 || box.top > innerHeight - 60)
+        document.getElementById('map').scrollIntoView({behavior:'smooth', block:'start'});
+    };
     list.appendChild(el);
   });
   PLAN.stops.forEach((s, i) => {
@@ -1080,7 +1117,8 @@ async function ensureRoute(id){
     l.title = TYPES[t].label;
     tbox.appendChild(l);
   });
-  document.getElementById('legend').innerHTML = Object.keys(TYPES).map(t =>
+  document.getElementById('legend').innerHTML = '<div class="lg-h">Key ▸</div>'
+    + Object.keys(TYPES).map(t =>
     '<div><span class="badge" style="background:' + TYPES[t].bg + ';border-color:' + TYPES[t].bd
     + ';color:' + TYPES[t].fg + '">' + t + '</span> ' + TYPES[t].label + '</div>').join('')
     + '<div><span class="badge st-shut" style="background:' + TYPES.C.bg + ';border-color:'
@@ -1143,7 +1181,22 @@ async function ensureRoute(id){
   // the nearest visible route, so the line no longer has to be hit exactly.
   map.on('click', e => onMapClick(e.latlng));
   map.on('moveend', drawShelters);
-  window.addEventListener('resize', () => { drawProfile(); });
+  // Leaflet measures its container once; a rotation or a layout change on a
+  // phone leaves it drawing into the old size unless told.
+  window.addEventListener('resize', () => { map.invalidateSize(); drawProfile(); });
+  const ctlBtn = document.getElementById('ctlToggle');
+  ctlBtn.onclick = () => {
+    const open = document.body.classList.toggle('ctl-open');
+    ctlBtn.textContent = open ? 'Hide settings' : 'Settings';
+    ctlBtn.setAttribute('aria-expanded', String(open));
+    map.invalidateSize();
+  };
+  const legend = document.getElementById('legend');
+  legend.querySelector('.lg-h').onclick = () => {
+    legend.classList.toggle('open');
+    legend.querySelector('.lg-h').textContent = legend.classList.contains('open') ? 'Key ▾' : 'Key ▸';
+  };
+  L.DomEvent.disableClickPropagation(legend);
   window.__plannerReady = true;
 })();
 
