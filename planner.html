@@ -92,6 +92,7 @@ button:disabled{opacity:.4;cursor:default}
 .lk-b.on{background:#2a4a20;border-color:#50a040;color:#b0e0a0}
 .lk-b:hover{border-color:#4a9fd0}
 .badge.locked{box-shadow:0 0 0 2px #ffd060,0 0 5px #000a}
+.badge.faint{opacity:.48}
 </style>
 </head>
 <body>
@@ -458,10 +459,11 @@ function drawLocks(){
 }
 
 // --- rendering ------------------------------------------------------------
-function badge(t, locked){
+function badge(t, locked, faint){
   const s = TYPES[t] || TYPES.A;
   return L.divIcon({className:'', iconSize:[19,19], iconAnchor:[9.5,9.5],
-    html:'<div class="badge' + (locked ? ' locked' : '') + '" style="background:'+s.bg
+    html:'<div class="badge' + (locked ? ' locked' : '') + (faint ? ' faint' : '')
+         + '" style="background:'+s.bg
          +';border-color:'+s.bd+';color:'+s.fg+'">'+t+'</div>'});
 }
 function pinIcon(colour){
@@ -476,13 +478,15 @@ function drawRoutes(){
     const meta = ROUTE_META[id];
     if (!meta.on || !R[id]) return;
     const isActive = id === active;
-    // With a range picked, the rest of the active route drops back so the
-    // chosen section reads as the subject rather than one stretch of 755 km.
+    // Every route that is switched on is drawn at the same strength. The
+    // chosen section reads as the subject because selLine is drawn over it at
+    // twice the width, not by making the other lines hard to see - dimming
+    // the active route to 0.3 left it fainter than routes merely toggled on.
     const ranged = isActive && pick.start && pick.end;
     lines[id] = L.polyline(R[id].points.map(p => [p[0], p[1]]), {
       color: meta.colour,
-      weight: isActive ? (ranged ? 2 : 4) : 2.5,
-      opacity: isActive ? (ranged ? 0.3 : 0.95) : 0.45
+      weight: isActive ? (ranged ? 3 : 4) : 3,
+      opacity: isActive ? (ranged ? 0.8 : 0.95) : 0.8
     }).addTo(map);
   });
   if (selLine){ map.removeLayer(selLine); selLine = null; }
@@ -491,7 +495,7 @@ function drawRoutes(){
     const seg = rt.points.slice(idxAtKm(rt, pick.start.km), idxAtKm(rt, pick.end.km) + 1)
                          .map(p => [p[0], p[1]]);
     if (seg.length > 1){
-      selLine = L.polyline(seg, {color:ROUTE_META[active].colour, weight:5, opacity:1}).addTo(map);
+      selLine = L.polyline(seg, {color:ROUTE_META[active].colour, weight:6, opacity:1}).addTo(map);
     }
   }
 }
@@ -499,43 +503,83 @@ function drawRoutes(){
 function drawShelters(){
   layers.shelters.clearLayers();
   const hint = document.getElementById('zoomhint');
-  const rt = R[active];
-  if (!rt) return;
+  if (!R[active]) return;
   if (map.getZoom() < SHELTER_ZOOM){
     hint.textContent = 'Zoom in to see places to sleep';
     return;
   }
   const on = new Set(Object.keys(TYPES).filter(t => TYPES[t].on));
   const b = map.getBounds();
-  // Once a range is picked, only show what is inside it - everything else is
-  // noise for the trip being planned.
+  // Every route that is switched on contributes its places to sleep, not only
+  // the one being planned. Drawing just the active route's meant that panning
+  // along a stretch where the other two run showed an empty map - 48 huts in
+  // view and nothing on screen.
+  const vis = Object.keys(ROUTE_META).filter(id => ROUTE_META[id].on && R[id]);
+  // A hut can serve more than one route, so collect by id and keep every
+  // projection instead of stamping it down two or three times.
+  const byId = new Map();
+  vis.forEach(id => {
+    R[id].shelters.forEach(s => {
+      if (!b.contains(L.latLng(s.ll[0], s.ll[1]))) return;
+      let e = byId.get(s.id);
+      if (!e){ e = {s: s, on: []}; byId.set(s.id, e); }
+      e.on.push({route: id, km: s.km, offM: s.offM});
+    });
+  });
+  // The picked section is still the subject: what sits inside it on the route
+  // being planned stays at full strength, everything else recedes. Receding is
+  // not the same as hiding, which is where this went wrong before.
   const lo = (pick.start && pick.end) ? pick.start.km - 1 : -Infinity;
   const hi = (pick.start && pick.end) ? pick.end.km + 1 : Infinity;
-  let n = 0;
-  rt.shelters.forEach(s => {
-    const lk = lockOf(s.id);
-    if (s.km < lo || s.km > hi) return;
-    // A locked stop stays on the map even with its type switched off: hiding
-    // a place the plan is still built around would be a lie.
-    if ((!on.has(s.type) && !lk) || !b.contains(L.latLng(s.ll[0], s.ll[1]))) return;
-    n++;
-    L.marker(s.ll, {icon:badge(s.type, !!lk)})
+  const inFocus = e => e.on.some(o => o.route === active && o.km >= lo && o.km <= hi);
+
+  let items = [];
+  byId.forEach(e => { if (on.has(e.s.type) || lockOf(e.s.id)) items.push(e); });
+  // Several hundred divIcons make panning sticky, so when the view is that
+  // wide keep the ones that bear on the plan and say how many were dropped.
+  const CAP = 320;
+  let hidden = 0;
+  if (items.length > CAP){
+    const keep = items.filter(inFocus);
+    const shown = keep.length ? keep.slice(0, CAP) : items.slice(0, CAP);
+    hidden = items.length - shown.length;
+    items = shown;
+  }
+
+  items.forEach(e => {
+    const s = e.s, lk = lockOf(s.id), focus = inFocus(e);
+    const mine = e.on.some(o => o.route === active);
+    L.marker(s.ll, {icon: badge(s.type, !!lk, !focus && !lk)})
      .bindPopup('<h4>' + esc(s.label) + '</h4><p class="m">'
        + (TYPES[s.type] ? TYPES[s.type].label : s.type)
        + (s.ele ? ' · ' + s.ele + ' m' : '')
-       + '<br>' + ROUTE_META[active].name + ' km ' + s.km.toFixed(1)
-       + ' · ' + s.offM + ' m off route'
+       // name every route it serves, with that route's own km
+       + '<br>' + e.on.map(o => ROUTE_META[o.route].name + ' km ' + o.km.toFixed(1)
+           + ' · ' + o.offM + ' m off route').join('<br>')
        + (s.capacity ? '<br>capacity ' + esc(s.capacity) : '')
        + (s.confidence !== 'high' ? '<br><i>classified from incomplete tags ('
            + s.confidence + ' confidence)</i>' : '')
        + '<br><span style="color:#6a8398">' + esc(s.id) + '</span></p>'
-       + '<p style="margin:5px 0 0"><button class="lk-b' + (lk ? ' on' : '')
-       + '" onclick="toggleLock(\'' + s.id + '\')">'
-       + (lk ? 'unlock this stop' : 'lock as a stop') + '</button></p>')
+       // Locking works against the route being planned, so offer it only there
+       // rather than leaving a button that silently does nothing.
+       + (mine
+          ? '<p style="margin:5px 0 0"><button class="lk-b' + (lk ? ' on' : '')
+            + '" onclick="toggleLock(\'' + s.id + '\')">'
+            + (lk ? 'unlock this stop' : 'lock as a stop') + '</button></p>'
+          : '<p class="m" style="margin:5px 0 0">Not on ' + ROUTE_META[active].name
+            + ' — click that route\'s line to plan on it</p>'))
      .addTo(layers.shelters);
   });
-  hint.textContent = n + ' places to sleep in view · ' + ROUTE_META[active].name
-    + ((pick.start && pick.end) ? ' · within your section' : '');
+
+  const counts = vis.map(id => items.filter(e => e.on.some(o => o.route === id)).length);
+  const per = vis.map((id, k) => counts[k] + ' ' + ROUTE_META[id].name).join(' · ');
+  // The per-route counts can add up to more than the total, because a hut
+  // within 2.5 km of two routes serves both. Say so rather than leaving the
+  // arithmetic looking broken.
+  const shared = counts.reduce((a, c) => a + c, 0) - items.length;
+  hint.textContent = items.length + ' places to sleep in view · ' + per
+    + (shared > 0 ? ' · ' + shared + ' shared' : '')
+    + (hidden ? ' · ' + hidden + ' more, zoom in' : '');
 }
 
 function drawPins(){
