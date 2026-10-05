@@ -287,6 +287,37 @@ if (shut){
     p.ok && p.stops.some(s => s.id === shut.id), shut.label + (p.ok ? '' : ' - ' + p.kind));
 } else console.log('  --    no closed hut found, skipped');
 
+// =========================================================== 13. hut links
+// Where you sleep is what a plan rests on, so every hut must carry a way to
+// check it, and no link may be malformed or unverified. A wrong hut-database
+// reference would open ANOTHER hut's page - verify_links.py confirms each one
+// by position before it is allowed into the data.
+console.log('\n13. every hut carries a source, and only well-formed links');
+const SHD = JSON.parse(fs.readFileSync(path.join(SITE, 'data/shelters.json'), 'utf8'));
+const allS = SHD.shelters;
+check('the data records when links were checked', !!SHD.source.linksChecked, SHD.source.linksChecked);
+check('every hut links to its OpenStreetMap source',
+  allS.every(s => s.links && /^https:\/\/www\.openstreetmap\.org\/(node|way|relation)\/\d+$/.test(s.links.osm)),
+  allS.length + ' huts');
+const webBad = allS.filter(s => s.links && s.links.website && !/^https?:\/\/[^\s"'<>]+$/.test(s.links.website));
+check('every website is a plain http(s) URL', webBad.length === 0, webBad.length + ' bad');
+const telBad = allS.filter(s => (s.links.phone || []).some(p => p.replace(/[^\d+]/g, '').replace(/^\+/, '').length < 8));
+check('every phone number has at least 8 digits', telBad.length === 0, telBad.length + ' bad');
+const riBad = allS.filter(s => s.links.refugesInfo && !/^https:\/\/www\.refuges\.info\/point\/\d+\//.test(s.links.refugesInfo));
+const prBad = allS.filter(s => s.links.pyreneesRefuges && !/^https:\/\/www\.pyrenees-refuges\.com\/[a-z-]+\/[a-z0-9-]+-\d+$/.test(s.links.pyreneesRefuges));
+check('hut-database links are canonical pages', riBad.length + prBad.length === 0,
+  allS.filter(s => s.links.refugesInfo).length + ' refuges.info, '
+  + allS.filter(s => s.links.pyreneesRefuges).length + ' pyrenees-refuges');
+check('a dead website is never linked, only explained',
+  allS.every(s => !(s.links.website && s.links.websiteNote)),
+  allS.filter(s => s.links.websiteNote).length + ' explained');
+const staffed = allS.filter(s => s.type === 'R' && s.status === 'ok');
+const reach = s => (s.links.phone || []).length || s.links.website || s.links.email
+                   || s.links.refugesInfo || s.links.pyreneesRefuges;
+check('almost every usable staffed refuge can be called, written to or looked up',
+  staffed.filter(reach).length / staffed.length >= 0.95,
+  staffed.filter(reach).length + ' of ' + staffed.length);
+
 // =========================================================== 11. performance
 console.log('\n11. cost of the extra dimension');
 const whole = [['hrp',hrp],['gr11',gr11],['gr10',gr10]];

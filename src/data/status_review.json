@@ -1,84 +1,196 @@
 {
-  "_about": "Human review of huts whose OSM description or note suggests they may be closed, ruined or restricted. Free text cannot be trusted to a keyword match: on the first pass about half the matches were wrong (\"the refuge is open, simply closed by an iron door\"; \"a ruined hut restored in 2019\"). Structured tags (access=private, demolished:*, historic=ruins ...) are applied automatically; free text only nominates a hut for review, and finalise_shelters.py refuses to write the data while any nomination is unreviewed. Statuses: ok | closed (cannot count on sleeping here) | gone (ruined, demolished or abandoned - not a place to sleep). caveat is shown to the hiker on an ok hut.",
-  "reviewed": "2026-10-03",
-  "source": "OSM descriptions as fetched 2026-09-28",
-  "decisions": {
-    "node/7425418126": {"name": "Refuge de l'Abérouat", "status": "closed",
-      "reason": "Permanently closed after judicial liquidation (reported 2026-08). Only a small day room remains, for eating under cover."},
-    "way/847472702": {"name": "Cabane de la Baigt de Saint-Cours", "status": "closed",
-      "reason": "Reported closed in 2025-06; the spring still runs."},
-    "node/7916672366": {"name": "Abri hivernal du lac d'Aubert", "status": "closed",
-      "reason": "Winter shelter, closed in summer."},
-    "way/398362489": {"name": "Cabane de La Lude", "status": "closed",
-      "reason": "Reported closed."},
-    "node/968204230": {"name": "Cabane de Coume Nère", "status": "closed",
-      "reason": "Closed in summer, occupied by the shepherd. A rough shelter for 2 stands beside it."},
-    "way/223961544": {"name": "Cabane de Peyrehitte", "status": "ok",
-      "reason": "Open and in good condition; it is the neighbouring hut that is locked.",
-      "caveat": "No water at the hut - the trough was empty."},
-    "node/968202948": {"name": "Cabane Pastorale du Col de Part", "status": "closed",
-      "reason": "Note says closed."},
-    "way/433028352": {"name": "Cabane d'Aouen", "status": "ok",
-      "reason": "Small room always open; the larger room may sometimes be locked.",
-      "caveat": "The always-open room is 2.5 x 2 m with one mattress; the larger room may be locked."},
-    "way/434540345": {"name": "Refuge forestier d'Arreau", "status": "closed",
-      "reason": "Forestry (ONF) refuge, closed. Picnic tables only."},
-    "way/434539498": {"name": "Cabane pastorale d'Arreau", "status": "closed",
-      "reason": "Shepherd's hut, reported closed in 2021-07."},
-    "way/128195144": {"name": "Cabane pastorale de Courtal Marti", "status": "closed",
-      "reason": "Reported closed."},
-    "node/963678657": {"name": "Cabane de la Jasse de Bretounels", "status": "ok",
-      "reason": "Half is reserved for the shepherd and locked; the other half is open.",
-      "caveat": "Only the open half is available: 4 places on a sleeping platform."},
-    "way/961125532": {"name": "Cabane du Campalou", "status": "closed",
-      "reason": "Built 2021; expected to be closed in summer because the shepherd uses it."},
-    "way/859190909": {"name": "Abri des Génibres", "status": "closed",
-      "reason": "Reported closed (2013); also tagged private."},
-    "way/1190335340": {"name": "Cabane de Garsan", "status": "ok",
-      "reason": "Shepherd's part locked; open part usable.",
-      "caveat": "Open part takes up to 4, partly filled with salt sacks in summer. Bring a mat; no firewood nearby."},
-    "way/614573687": {"name": "Cabane de La Coume", "status": "closed",
-      "reason": "Reported closed; tagged access=no."},
-    "way/997314985": {"name": "Cabane Matutano", "status": "closed",
-      "reason": "Refuge closed; usable only as emergency shelter (gendarmerie / mountain rescue)."},
-    "node/2306350014": {"name": "Abri de la Balmère", "status": "ok",
-      "reason": "Rock shelter; 'closed' refers to plastic sheeting around the sleeping area.",
-      "caveat": "Rock shelter, room for 2-3 behind plastic sheeting."},
-    "node/519720623": {"name": "Refuge forestier de la Mouline", "status": "ok",
-      "reason": "Refuge open; only the forestry (ONF) section is locked.",
-      "caveat": "Bunks for 4 without mattresses."},
-    "node/963754407": {"name": "Refuge des Vigourats", "status": "ok",
-      "reason": "Open; 'closed by an iron door' means it has a door."},
-    "relation/20517366": {"name": "Refugio de Viadós", "status": "ok",
-      "reason": "Staffed refuge (guardado). The matched text described its free section, which opens when the staffed part is closed."},
-    "way/192747802": {"name": "Cabaña de Santa Ana", "status": "ok",
-      "reason": "'Pièce fermée' means an enclosed room."},
-    "way/848814528": {"name": "Cabaña de Quillón", "status": "ok",
-      "reason": "'Pièce fermée' means an enclosed room."},
-    "way/283382215": {"name": "Refugi forestal de Baserca", "status": "gone",
-      "reason": "Largely destroyed (2017); a scrap of roof gives cover in a storm and nothing more."},
-    "way/685462416": {"name": "Sarrahèra de Baish", "status": "ok",
-      "reason": "Catalan 'porta tanca correctament' means the door closes properly."},
-    "way/177266663": {"name": "Refugi de la Trilla", "status": "closed",
-      "reason": "Locked."},
-    "way/226919736": {"name": "Venta espagnole", "status": "gone",
-      "reason": "Derelict ruin, apparently squatted. Floor space in bad weather only - emergency cover, not a planned night."},
-    "way/184628892": {"name": "Cal Pelo", "status": "ok",
-      "reason": "Solid roadman's hut. 'Of no interest in summer' is an opinion about its roadside position, not a closure."},
-    "way/333405233": {"name": "Cabane d'Arrégatiou", "status": "ok",
-      "reason": "Three enclosed rooms, free to hikers all year."},
-    "way/847571788": {"name": "Cabane du Liantran", "status": "ok",
-      "reason": "Former ruin restored in 2019: new frame, roof, door and sleeping platform."},
-    "relation/12151536": {"name": "Refugi de la Pleta del Duc", "status": "closed",
-      "reason": "May be locked by the shepherd during summer grazing; the description says to contact him."},
-    "way/838137348": {"name": "Orri des Légunes d'en haut", "status": "gone",
-      "reason": "Stone vault partly collapsed - not safe to sleep under."},
-    "way/845680352": {"name": "Cabane de Mirabail", "status": "closed",
-      "reason": "Reported closed; tagged private."},
-    "way/127125424": {"name": "Refugi de Juclar", "status": "ok",
-      "reason": "Staffed from early June to the end of September.",
-      "caveat": "Staffed early June to end of September only."},
-    "way/864933562": {"name": "Abri du Pla del Bouc", "status": "ok",
-      "reason": "'Porte fermée' describes the room being dark with the door shut."}
+ "_about": "Human review of huts whose OSM description or note suggests they may be closed, ruined or restricted. Free text cannot be trusted to a keyword match: on the first pass about half the matches were wrong (\"the refuge is open, simply closed by an iron door\"; \"a ruined hut restored in 2019\"). Structured tags (access=private, demolished:*, historic=ruins ...) are applied automatically; free text only nominates a hut for review, and finalise_shelters.py refuses to write the data while any nomination is unreviewed. Statuses: ok | closed (cannot count on sleeping here) | gone (ruined, demolished or abandoned - not a place to sleep). caveat is shown to the hiker on an ok hut. A decision may also carry type, correcting the classification where independent hut databases contradict it.",
+ "reviewed": "2026-10-03",
+ "source": "OSM descriptions as fetched 2026-09-28",
+ "decisions": {
+  "node/7425418126": {
+   "name": "Refuge de l'Abérouat",
+   "status": "closed",
+   "reason": "Permanently closed after judicial liquidation (reported 2026-08). Only a small day room remains, for eating under cover."
+  },
+  "way/847472702": {
+   "name": "Cabane de la Baigt de Saint-Cours",
+   "status": "closed",
+   "reason": "Reported closed in 2025-06; the spring still runs."
+  },
+  "node/7916672366": {
+   "name": "Abri hivernal du lac d'Aubert",
+   "status": "closed",
+   "reason": "Winter shelter, closed in summer."
+  },
+  "way/398362489": {
+   "name": "Cabane de La Lude",
+   "status": "closed",
+   "reason": "Reported closed."
+  },
+  "node/968204230": {
+   "name": "Cabane de Coume Nère",
+   "status": "closed",
+   "reason": "Closed in summer, occupied by the shepherd. A rough shelter for 2 stands beside it."
+  },
+  "way/223961544": {
+   "name": "Cabane de Peyrehitte",
+   "status": "ok",
+   "reason": "Open and in good condition; it is the neighbouring hut that is locked.",
+   "caveat": "No water at the hut - the trough was empty."
+  },
+  "node/968202948": {
+   "name": "Cabane Pastorale du Col de Part",
+   "status": "closed",
+   "reason": "Note says closed."
+  },
+  "way/433028352": {
+   "name": "Cabane d'Aouen",
+   "status": "ok",
+   "reason": "Small room always open; the larger room may sometimes be locked.",
+   "caveat": "The always-open room is 2.5 x 2 m with one mattress; the larger room may be locked."
+  },
+  "way/434540345": {
+   "name": "Refuge forestier d'Arreau",
+   "status": "closed",
+   "reason": "Forestry (ONF) refuge, closed. Picnic tables only."
+  },
+  "way/434539498": {
+   "name": "Cabane pastorale d'Arreau",
+   "status": "closed",
+   "reason": "Shepherd's hut, reported closed in 2021-07."
+  },
+  "way/128195144": {
+   "name": "Cabane pastorale de Courtal Marti",
+   "status": "closed",
+   "reason": "Reported closed."
+  },
+  "node/963678657": {
+   "name": "Cabane de la Jasse de Bretounels",
+   "status": "ok",
+   "reason": "Half is reserved for the shepherd and locked; the other half is open.",
+   "caveat": "Only the open half is available: 4 places on a sleeping platform."
+  },
+  "way/961125532": {
+   "name": "Cabane du Campalou",
+   "status": "closed",
+   "reason": "Built 2021; expected to be closed in summer because the shepherd uses it."
+  },
+  "way/859190909": {
+   "name": "Abri des Génibres",
+   "status": "closed",
+   "reason": "Reported closed (2013); also tagged private."
+  },
+  "way/1190335340": {
+   "name": "Cabane de Garsan",
+   "status": "ok",
+   "reason": "Shepherd's part locked; open part usable.",
+   "caveat": "Open part takes up to 4, partly filled with salt sacks in summer. Bring a mat; no firewood nearby."
+  },
+  "way/614573687": {
+   "name": "Cabane de La Coume",
+   "status": "closed",
+   "reason": "Reported closed; tagged access=no."
+  },
+  "way/997314985": {
+   "name": "Cabane Matutano",
+   "status": "closed",
+   "reason": "Refuge closed; usable only as emergency shelter (gendarmerie / mountain rescue)."
+  },
+  "node/2306350014": {
+   "name": "Abri de la Balmère",
+   "status": "ok",
+   "reason": "Rock shelter; 'closed' refers to plastic sheeting around the sleeping area.",
+   "caveat": "Rock shelter, room for 2-3 behind plastic sheeting."
+  },
+  "node/519720623": {
+   "name": "Refuge forestier de la Mouline",
+   "status": "ok",
+   "reason": "Refuge open; only the forestry (ONF) section is locked.",
+   "caveat": "Bunks for 4 without mattresses."
+  },
+  "node/963754407": {
+   "name": "Refuge des Vigourats",
+   "status": "ok",
+   "reason": "Open; 'closed by an iron door' means it has a door."
+  },
+  "relation/20517366": {
+   "name": "Refugio de Viadós",
+   "status": "ok",
+   "reason": "Staffed refuge (guardado). The matched text described its free section, which opens when the staffed part is closed."
+  },
+  "way/192747802": {
+   "name": "Cabaña de Santa Ana",
+   "status": "ok",
+   "reason": "'Pièce fermée' means an enclosed room."
+  },
+  "way/848814528": {
+   "name": "Cabaña de Quillón",
+   "status": "ok",
+   "reason": "'Pièce fermée' means an enclosed room."
+  },
+  "way/283382215": {
+   "name": "Refugi forestal de Baserca",
+   "status": "gone",
+   "reason": "Largely destroyed (2017); a scrap of roof gives cover in a storm and nothing more."
+  },
+  "way/685462416": {
+   "name": "Sarrahèra de Baish",
+   "status": "ok",
+   "reason": "Catalan 'porta tanca correctament' means the door closes properly."
+  },
+  "way/177266663": {
+   "name": "Refugi de la Trilla",
+   "status": "closed",
+   "reason": "Locked."
+  },
+  "way/226919736": {
+   "name": "Venta espagnole",
+   "status": "gone",
+   "reason": "Derelict ruin, apparently squatted. Floor space in bad weather only - emergency cover, not a planned night."
+  },
+  "way/184628892": {
+   "name": "Cal Pelo",
+   "status": "ok",
+   "reason": "Solid roadman's hut. 'Of no interest in summer' is an opinion about its roadside position, not a closure."
+  },
+  "way/333405233": {
+   "name": "Cabane d'Arrégatiou",
+   "status": "ok",
+   "reason": "Three enclosed rooms, free to hikers all year."
+  },
+  "way/847571788": {
+   "name": "Cabane du Liantran",
+   "status": "ok",
+   "reason": "Former ruin restored in 2019: new frame, roof, door and sleeping platform."
+  },
+  "relation/12151536": {
+   "name": "Refugi de la Pleta del Duc",
+   "status": "closed",
+   "reason": "May be locked by the shepherd during summer grazing; the description says to contact him."
+  },
+  "way/838137348": {
+   "name": "Orri des Légunes d'en haut",
+   "status": "gone",
+   "reason": "Stone vault partly collapsed - not safe to sleep under."
+  },
+  "way/845680352": {
+   "name": "Cabane de Mirabail",
+   "status": "closed",
+   "reason": "Reported closed; tagged private."
+  },
+  "way/127125424": {
+   "name": "Refugi de Juclar",
+   "status": "ok",
+   "reason": "Staffed from early June to the end of September.",
+   "caveat": "Staffed early June to end of September only."
+  },
+  "way/864933562": {
+   "name": "Abri du Pla del Bouc",
+   "status": "ok",
+   "reason": "'Porte fermée' describes the room being dark with the door shut."
+  },
+  "way/813259216": {
+   "name": "Refuge Da Silva",
+   "status": "ok",
+   "type": "C",
+   "reason": "Not staffed. Classified as a staffed refuge only because OSM tags it alpine_hut and the name says 'Refuge'. refuges.info (point 7966) lists it as an unattended hut with 4 places, one compartment open to walkers; pyrenees-refuges.com (1208) files it under cabane.",
+   "caveat": "Unattended: one compartment open to walkers, 4 places. Bring food and a sleeping bag."
   }
+ }
 }

@@ -103,6 +103,14 @@ button:disabled{opacity:.4;cursor:default}
 .share-b{background:#15283a;border:1px solid #2a4060;color:#9ab8d0;border-radius:5px;font:inherit;
   font-size:11px;padding:3px 9px;cursor:pointer;margin-top:6px}
 .share-b:hover{border-color:#4a9fd0;color:#dff0ff}
+.lnk{margin:5px 0 0;font-size:11px;line-height:1.7}
+.lnk a{color:#7ad0f0;text-decoration:none;white-space:nowrap;margin-right:9px}
+.lnk a:hover{text-decoration:underline}
+.lnk .bk{display:inline-block;font-size:10px;font-weight:600;border-radius:3px;padding:0 5px;margin-right:6px}
+.lnk .bk.req{background:#5a3a10;color:#ffd590}
+.lnk .bk.rec{background:#25384a;color:#bcd4e6}
+.lnk .nt{display:block;color:#ffcf90;font-size:10.5px;line-height:1.4;margin-top:2px}
+.lnk .none{display:block;color:#ffcf90;font-size:10.5px;line-height:1.4}
 #geo-chip{background:#1a2d3f;border:1px solid #2a4060;border-radius:8px;padding:5px 10px;
   color:#7ad0f0;font-size:10.5px;font-weight:700;cursor:pointer;box-shadow:0 2px 8px #0009;
   user-select:none;text-align:center;margin-bottom:6px}
@@ -269,8 +277,11 @@ function kmBetween(a, b){
   const dlon = (b[1]-a[1])*111.0*Math.cos((a[0]+b[0])/2*Math.PI/180);
   return Math.sqrt(dlat*dlat + dlon*dlon);
 }
+// Quotes too: hut links go into href="..." attributes, and an unescaped quote
+// in a URL would end the attribute early. Safe in text and in GPX (XML).
 function esc(t){ return String(t == null ? '' : t)
-  .replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;'); }
+  .replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;')
+  .replace(/"/g,'&quot;').replace(/'/g,'&#39;'); }
 
 function idxAtKm(rt, km){
   const c = rt.cum;
@@ -699,6 +710,40 @@ function statusNote(s){
   return '';
 }
 
+// How to check a place before relying on it: call, write, book, read the
+// hut-database reports, and the map entry it all came from. Only links the
+// data pipeline has verified reach here (src/data/verify_links.py); a website
+// found dead is replaced by a note saying so. `compact` is the day-card form.
+function linksHtml(s, compact){
+  const L = s.links;
+  if (!L) return '';
+  const http = u => /^https?:\/\//i.test(u || '');
+  const a = (href, text, title) => '<a href="' + esc(href) + '" target="_blank" rel="noopener"'
+    + (title ? ' title="' + esc(title) + '"' : '') + ' onclick="event.stopPropagation()">' + text + '</a>';
+  const bits = [];
+  if (L.reservation === 'required') bits.push('<span class="bk req">booking required</span>');
+  else if (L.reservation === 'recommended' || L.reservation === 'yes')
+    bits.push('<span class="bk rec">booking recommended</span>');
+  (L.phone || []).slice(0, compact ? 1 : 3).forEach(p => {
+    const tel = p.replace(/[^\d+]/g, '');
+    bits.push('<a href="tel:' + esc(tel) + '" onclick="event.stopPropagation()">&#9742; ' + esc(p) + '</a>');
+  });
+  if (http(L.website)) bits.push(a(L.website, 'website &#8599;', L.website));
+  if (L.email && !compact)
+    bits.push('<a href="mailto:' + esc(L.email) + '" onclick="event.stopPropagation()">&#9993; email</a>');
+  if (http(L.refugesInfo)) bits.push(a(L.refugesInfo, 'refuges.info &#8599;', 'Hut page with visitor reports'));
+  if (http(L.pyreneesRefuges)) bits.push(a(L.pyreneesRefuges, 'pyrenees-refuges &#8599;', 'Hut page with visitor reports'));
+  if (!compact && http(L.osm)) bits.push(a(L.osm, 'map entry &#8599;', 'OpenStreetMap - where this place comes from'));
+  const notes = [L.websiteNote, L.refugesInfoNote, L.pyreneesRefugesNote].filter(Boolean)
+    .map(n => '<span class="nt">&#9888; ' + esc(n) + '</span>').join('');
+  const reachable = (L.phone && L.phone.length) || http(L.website) || L.email
+                    || http(L.refugesInfo) || http(L.pyreneesRefuges);
+  const none = (!reachable && s.status !== 'gone')
+    ? '<span class="none">&#9888; Nothing but the map entry is recorded for this place - no phone, '
+      + 'website or hut-database page. Ask locally, or plan a fallback for the night.</span>' : '';
+  return '<div class="lnk">' + bits.join('') + notes + none + '</div>';
+}
+
 function drawShelters(){
   layers.shelters.clearLayers();
   const hint = document.getElementById('zoomhint');
@@ -758,8 +803,9 @@ function drawShelters(){
        + (s.capacity ? '<br>capacity ' + esc(s.capacity) : '')
        + (s.confidence !== 'high' ? '<br><i>classified from incomplete tags ('
            + s.confidence + ' confidence)</i>' : '')
-       + '<br><span style="color:#6a8398">' + esc(s.id) + '</span></p>'
+       + '</p>'
        + statusNote(s)
+       + linksHtml(s, false)
        // Locking works against the route being planned, so offer it only there
        // rather than leaving a button that silently does nothing - and never
        // for a ruin.
@@ -1015,7 +1061,7 @@ function render(){
       + (d.to.ele ? '<br>' + d.to.ele + ' m · km ' + d.to.km.toFixed(1) : '')
       // a locked stop may be closed or private; an ordinary one may carry a
       // caveat - either way the hiker reads it here, not only in a popup
-      + (d.to.id ? statusNote(d.to) : '')
+      + (d.to.id ? statusNote(d.to) + linksHtml(d.to, true) : '')
       + (d.to.id ? '<br><button class="lk-b' + (lockOf(d.to.id) ? ' on' : '')
           + '" onclick="event.stopPropagation();toggleLock(\'' + d.to.id + '\','
           + (i+1) + ')">' + (lockOf(d.to.id) ? 'locked to night ' + (i+1)
@@ -1035,7 +1081,7 @@ function render(){
     if (!s.type) return;
     const lk = lockOf(s.id);
     L.marker(s.ll || llAtKm(rt, s.km), {icon:badge(s.type, !!lk, false, s.status), zIndexOffset:600})
-     .bindPopup('<h4>Night ' + i + ' — ' + esc(s.label) + '</h4>'
+     .bindPopup('<h4>Night ' + i + ' — ' + esc(s.label) + '</h4>' + statusNote(s) + linksHtml(s, false)
        + '<p style="margin:5px 0 0"><button class="lk-b' + (lk ? ' on' : '')
        + '" onclick="toggleLock(\'' + s.id + '\',' + i + ')">'
        + (lk ? 'unlock' : 'keep this as night ' + i) + '</button></p>')
@@ -1169,6 +1215,22 @@ function replan(){
   syncInputs(); drawRoutes(); drawPins(); drawShelters(); render();
 }
 
+// In a GPS app on the trail the phone number matters more than anything, so
+// it goes in the description; the verified pages go in as GPX <link>s.
+function gpxLinks(s){
+  const L = s.links || {}, desc = [];
+  if (L.reservation === 'required') desc.push('Booking required');
+  if (L.phone && L.phone.length) desc.push('Tel ' + L.phone.join(' / '));
+  if (s.status && s.status !== 'ok') desc.push('Recorded as ' + s.status);
+  if (s.caveat) desc.push(s.caveat);
+  let x = desc.length ? '<desc>' + esc(desc.join('. ')) + '</desc>' : '';
+  [[L.website, 'Website'], [L.refugesInfo, 'refuges.info'], [L.pyreneesRefuges, 'pyrenees-refuges.com'],
+   [L.osm, 'OpenStreetMap']].forEach(([u, t]) => {
+    if (u && /^https?:\/\//i.test(u)) x += '<link href="' + esc(u) + '"><text>' + t + '</text></link>';
+  });
+  return x;
+}
+
 function exportGPX(){
   if (!PLAN || !PLAN.ok) return;
   const rt = R[active];
@@ -1184,7 +1246,8 @@ function exportGPX(){
     const ll = s.ll || llAtKm(rt, s.km);
     out.push('  <wpt lat="' + ll[0].toFixed(6) + '" lon="' + ll[1].toFixed(6) + '">'
       + (s.ele ? '<ele>' + s.ele + '</ele>' : '')
-      + '<name>' + esc('Night ' + i + ' – ' + s.label) + '</name><sym>Lodging</sym></wpt>');
+      + '<name>' + esc('Night ' + i + ' – ' + s.label) + '</name>' + gpxLinks(s)
+      + '<sym>Lodging</sym></wpt>');
   });
   out.push('  <trk><name>' + esc(ROUTE_META[active].full) + '</name><trkseg>');
   pts.forEach(p => out.push('    <trkpt lat="' + p[0].toFixed(6) + '" lon="' + p[1].toFixed(6)
@@ -1209,7 +1272,7 @@ async function ensureRoute(id){
     if (o) shelters.push({id:s.id, label:s.label, type:s.type, ele:s.ele,
                           capacity:s.capacity, confidence:s.confidence,
                           status:s.status || 'ok', statusWhy:s.statusWhy || [],
-                          caveat:s.caveat || null,
+                          caveat:s.caveat || null, links:s.links || null,
                           ll:s.ll, km:o.km, offM:o.offM});
   });
   shelters.sort((a,b) => a.km - b.km);

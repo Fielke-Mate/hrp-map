@@ -9,6 +9,8 @@ Ordered by risk to a hiker first, then by usefulness.
 | # | Item | Why | Status |
 |---|------|-----|--------|
 | 1 | **Accommodation safety pass** — never plan to a hut OSM records as demolished, ruined, abandoned, closed or private; show the reason on the map | 104 of 452 feasible plans in a sweep stopped at such a hut | **done** |
+| 1b | **Hut links** — call, email, booking flag, website, refuges.info and pyrenees-refuges pages, OSM source; every hut-database link checked by position, every website checked, dead ones explained not linked | Where you sleep is critical; if it does not exist you sleep outside | **done** |
+| 1c | **Hut types against the hut databases** — 10 staffed refuges are classified too low (Bayssellance, Ayous, Oulettes de Gaube shown as bare shelters); 1 was too high (Refuge Da Silva, now fixed) | A "staffed refuges only" plan skips the best-known HRP refuges | needs your OK |
 | 2 | **Access points** — stations, bus stations and airports, with distance to the trail; click one to start or finish there | Your idea: plan from where the train arrives | needs Q6–Q10 |
 | 3 | **Offline for the planner** — page and all route and hut data saved on first visit; map tiles saved per section with a size estimate and a hard cap; data re-checked whenever there is signal; wifi login pages can no longer overwrite saved files | The planner did not work offline at all | **done** |
 | 4 | **Phone layout** — on narrow screens everything stacks: map first at full width, then profile, then days; limits fold behind a Settings button; the key collapses | The map was 35 px wide on a 375 px phone | **done** |
@@ -57,6 +59,7 @@ gets a human decision with a reason in `src/data/status_review.json`, and
 
 ## Done
 
+- Hut links: 365 refuges.info + 390 pyrenees-refuges pages verified by position; 577 websites checked, 75 dead ones explained instead of linked
 - Shareable plan links, round trip verified identical (works offline: state is in the #fragment)
 - Your location on the route, with tonight's stop (works offline)
 - Phone layout: map 375 px wide and 120 px from the top on a phone (was 35 px wide, 386 px down)

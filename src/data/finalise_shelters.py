@@ -15,7 +15,7 @@ Three corrections the verification pass showed are needed:
   526 records have no name. A planner that says "sleep at (unnamed)" is not
   useful, so they get a descriptive label built from what is known.
 """
-import json, math, os, sys
+import json, math, os, re, sys
 from collections import defaultdict, Counter
 
 HERE = os.path.dirname(os.path.abspath(__file__))
@@ -164,6 +164,12 @@ for r in merged:
                          [w for w in r.get('statusWhy', []) if not w.startswith('reviewed')]
         if d.get('caveat'):
             r['caveat'] = d['caveat']
+        # A decision may also correct the TYPE, when independent hut databases
+        # contradict the classification - kept with the old value and reason.
+        if d.get('type') and d['type'] != r['type']:
+            r['typeWas'] = r['type']
+            r['type'] = d['type']
+            r['basis'] = list(r.get('basis', [])) + ['reviewed %s: %s' % (review['reviewed'], d['reason'])]
     elif r.get('reviewNotes'):
         unreviewed.append(r)
     r.pop('reviewNotes', None)
@@ -207,6 +213,68 @@ for r in merged:
         r['label'] = r['name']
 print('descriptive labels generated for unnamed records: %d' % unnamed)
 
+
+# ---- 3b. links: where a hiker can check, call or book --------------------
+# Where you sleep is the decision a plan rests on, so every hut carries the
+# ways to check it before relying on it. OSM is always there as the source;
+# the rest only if it exists - and the hut-database pages only once
+# verify_links.py has confirmed they describe THIS hut (a wrong reference
+# number would open another hut's page, which is worse than no link). A
+# website whose domain has lapsed or whose page is gone is not linked; the
+# hiker is told instead, since a lapsed domain can mean the place has closed.
+#
+# Pipeline order on fresh data: build -> finalise -> verify_links -> finalise.
+RAW = json.load(open(os.path.join(CACHE, 'all_features.json')))
+VF = os.path.join(HERE, '.links', 'verified.json')
+VER = json.load(open(VF, encoding='utf-8')) if os.path.exists(VF) else {'links': {}, 'checked': None}
+PHONE_KEYS = ('phone', 'contact:phone', 'mobile', 'contact:mobile', 'phone:mobile')
+EMAIL_RE = re.compile(r'^[^@\s;]+@[^@\s;]+\.[a-z]{2,}$', re.I)
+
+
+def raw_tags(r):
+    t = {}
+    for i in [r['id']] + list(r.get('mergedFrom', [])):
+        for k, v in (RAW.get(i, {}).get('tags') or {}).items():
+            t.setdefault(k, v)
+    return t
+
+
+unverified = 0
+for r in merged:
+    t, v = raw_tags(r), VER['links'].get(r['id'], {})
+    L = {'osm': 'https://www.openstreetmap.org/' + r['id']}
+    phones, seen = [], set()
+    for k in PHONE_KEYS:
+        for p in re.split(r'[;,]', str(t.get(k) or '')):
+            p = ' '.join(p.split())
+            digits = re.sub(r'[^\d+]', '', p)
+            if len(digits.lstrip('+')) >= 8 and digits not in seen:
+                seen.add(digits)
+                phones.append(p)
+    if phones:
+        L['phone'] = phones
+    em = str(t.get('email') or t.get('contact:email') or '').split(';')[0].strip()
+    if EMAIL_RE.match(em):
+        L['email'] = em
+    if t.get('reservation') in ('required', 'recommended', 'yes', 'no'):
+        L['reservation'] = t['reservation']
+    if v.get('website') and not v.get('website_note'):
+        L['website'] = v['website']
+    for src_key, dst in (('website_note', 'websiteNote'), ('refuges_info', 'refugesInfo'),
+                         ('refuges_info_note', 'refugesInfoNote'),
+                         ('pyrenees_refuges', 'pyreneesRefuges'),
+                         ('pyrenees_refuges_note', 'pyreneesRefugesNote')):
+        if v.get(src_key):
+            L[dst] = v[src_key]
+    if ((t.get('ref:refuges.info') and 'refuges_info' not in v)
+            or (t.get('ref:FR:pyrenees_refuges') and 'pyrenees_refuges' not in v)
+            or ((t.get('website') or t.get('contact:website')) and 'website' not in v)):
+        unverified += 1
+    r['links'] = L
+if unverified:
+    print('WARNING: %d huts have references or websites not yet checked - run '
+          'src/data/verify_links.py, then this script again' % unverified)
+
 # ---- 4. write -------------------------------------------------------------
 for r in merged:
     r.pop('eleDem', None)
@@ -219,6 +287,7 @@ doc = {
                # shown to the hiker beside the data, so they know how old the
                # hut statuses are when planning offline
                'reviewed': review['reviewed'],
+               'linksChecked': VER.get('checked'),
                'elevation': 'AWS Terrain Tiles z12, used where the OSM ele tag '
                             'is absent or disagrees by more than 50 m',
                'maxOffRouteKm': 2.5},
@@ -237,3 +306,14 @@ print('by type      : %s' % dict(Counter(r['type'] for r in merged)))
 print('by confidence: %s' % dict(Counter(r['confidence'] for r in merged)))
 print('by status    : %s' % dict(Counter(r.get('status', 'ok') for r in merged)))
 print('named        : %d of %d' % (sum(1 for r in merged if r['name']), len(merged)))
+direct = lambda r: any(k in r['links'] for k in ('phone', 'website', 'email'))
+hutdb = lambda r: any(k in r['links'] for k in ('refugesInfo', 'pyreneesRefuges'))
+print('links        : phone %d, website %d, email %d, hut database %d, OSM only %d'
+      % (sum('phone' in r['links'] for r in merged), sum('website' in r['links'] for r in merged),
+         sum('email' in r['links'] for r in merged), sum(hutdb(r) for r in merged),
+         sum(not direct(r) and not hutdb(r) for r in merged)))
+for typ in 'RGCAB':
+    rs = [r for r in merged if r['type'] == typ]
+    print('   %s %4d huts: %3d%% can be called, written to or looked up; %3d%% OSM only'
+          % (typ, len(rs), 100 * sum(direct(r) or hutdb(r) for r in rs) / max(1, len(rs)),
+             100 * sum(not direct(r) and not hutdb(r) for r in rs) / max(1, len(rs))))
