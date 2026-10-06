@@ -11,7 +11,7 @@ Ordered by risk to a hiker first, then by usefulness.
 | 1 | **Accommodation safety pass** — never plan to a hut OSM records as demolished, ruined, abandoned, closed or private; show the reason on the map | 104 of 452 feasible plans in a sweep stopped at such a hut | **done** |
 | 1b | **Hut links** — call, email, booking flag, website, refuges.info and pyrenees-refuges pages, OSM source; every hut-database link checked by position, every website checked, dead ones explained not linked | Where you sleep is critical; if it does not exist you sleep outside | **done** |
 | 1c | **Hut types against the hut databases** — 10 staffed refuges are classified too low (Bayssellance, Ayous, Oulettes de Gaube shown as bare shelters); 1 was too high (Refuge Da Silva, now fixed) | A "staffed refuges only" plan skips the best-known HRP refuges | needs your OK |
-| 2 | **Access points** — stations, bus stations and airports, with distance to the trail; click one to start or finish there | Your idea: plan from where the train arrives | needs Q6–Q10 |
+| 2 | **Access points** — 25 places to start, each with the realistic ways from Paris: a direct train to the trail, or a direct train to a gateway then a regional train and/or bus; built from the official SNCF, liO and Pyrénées-Atlantiques timetables; Start/Finish here buttons | Plan from where the train arrives | **done** — Spanish side still to add |
 | 3 | **Offline for the planner** — page and all route and hut data saved on first visit; map tiles saved per section with a size estimate and a hard cap; data re-checked whenever there is signal; wifi login pages can no longer overwrite saved files | The planner did not work offline at all | **done** |
 | 4 | **Phone layout** — on narrow screens everything stacks: map first at full width, then profile, then days; limits fold behind a Settings button; the key collapses | The map was 35 px wide on a 375 px phone | **done** |
 | 5 | **Your location** — GPS dot, km along the route, tonight's stop with door-to-door distance, climb along the route and time; never points at a closed or ruined hut | The planner had lost it; GPS works with no signal | **done** |
@@ -28,13 +28,10 @@ Ordered by risk to a hiker first, then by usefulness.
 4. **Multi-route plans** — should the planner choose where to switch routes, or should you?
 5. **refuges.info** — happy to use it as a verification source (external dependency, CC BY-SA)?
 
-Access points (item 2) — recommendation in brackets:
+Access points — open follow-ups:
 
-6. **Which kinds?** (train stations and airports, plus proper bus stations in towns — not every roadside stop)
-7. **How close to the trail?** (show both, labelled "on the trail" within 3 km and "onward transport needed" within ~20 km)
-8. **Airports?** (gateway markers when zoomed out, plus nearest airports listed for the plan's start and finish)
-9. **Click a station to set start/finish?** (yes — snap to the nearest trail point)
-10. **Timetables?** (no — location plus a link to the operator; summer-only services cannot be read reliably from OSM)
+6. **Spanish side** — load Renfe and the Navarra / Aragón / Catalonia bus timetables so GR11 starts are covered (today only Hendaye, Latour-de-Carol and Bourg-Madame).
+7. **Airports** — not shown yet; train access came first, as you asked.
 
 ## How hut status works
 
@@ -59,6 +56,7 @@ gets a human decision with a reason in `src/data/status_review.json`, and
 
 ## Done
 
+- Access from Paris: 25 trailheads from the official timetables, including the original trip (TGV to Lourdes, bus 965, navette to Pont d'Espagne) and home from Luchon
 - Hut links: 365 refuges.info + 390 pyrenees-refuges pages verified by position; 577 websites checked, 75 dead ones explained instead of linked
 - Shareable plan links, round trip verified identical (works offline: state is in the #fragment)
 - Your location on the route, with tonight's stop (works offline)

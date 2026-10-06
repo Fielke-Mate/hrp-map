@@ -318,6 +318,37 @@ check('almost every usable staffed refuge can be called, written to or looked up
   staffed.filter(reach).length / staffed.length >= 0.95,
   staffed.filter(reach).length + ' of ' + staffed.length);
 
+// =========================================================== 14. access from Paris
+// Places to start, built from the official timetables by build_access.py.
+// The anchors are the journey this project began with: TGV to Lourdes, bus
+// 965 to Cauterets; and home from Luchon by train via Toulouse.
+console.log('\n14. places to start, reached from Paris');
+const ACC = JSON.parse(fs.readFileSync(path.join(SITE, 'data/access.json'), 'utf8'));
+const TH = ACC.trailheads;
+check('there are places to start along the routes', TH.length >= 20, TH.length + ' trailheads');
+check('every trailhead is on a route, within 3 km',
+  TH.every(h => h.routes.length && h.routes.every(r => r.offM <= 3000)));
+check('every way in starts with a direct train from Paris that runs on 20+ days',
+  TH.every(h => h.options.length && h.options.every(o => o.legs[0].mode === 'train'
+    && o.legs[0].services.length && o.legs[0].services.every(sv => sv.when.days >= 20))));
+const busLegs = TH.flatMap(h => h.options.flatMap(o => o.legs.filter(l => l.mode === 'bus')));
+check('every bus runs in summer (10+ days), or on 20+ days where summer is not published',
+  busLegs.every(l => l.when.summerDays != null ? l.when.summerDays >= 10 : l.when.days >= 20),
+  busLegs.length + ' bus legs');
+const curated = TH.flatMap(h => h.options.flatMap(o => o.legs.filter(l => l.source === 'curated')));
+check('a leg in no open timetable is marked curated and says where it comes from',
+  curated.every(l => l.provenance && l.provenance.length > 20), curated.length + ' curated');
+const accUrls = TH.flatMap(h => h.options.flatMap(o => o.legs.map(l => l.url).filter(Boolean)));
+check('every operator link is https', accUrls.every(u => /^https:\/\//.test(u)), accUrls.length + ' links');
+const caut = TH.find(h => /^CAUTERETS/i.test(h.name));
+check('anchor: Cauterets is reached by train to Lourdes and bus 965',
+  !!caut && caut.options.some(o => o.legs[0].to === 'Lourdes'
+    && o.legs.some(l => l.mode === 'bus' && /^965\b/.test(l.line))));
+const luch = TH.find(h => h.name === 'Luchon');
+check('anchor: Luchon is reached by train via Toulouse',
+  !!luch && luch.options.some(o => /Toulouse/.test(o.legs[0].to) && o.legs[1] && o.legs[1].mode === 'train'));
+check('the data says what it does not cover', (ACC.gaps || []).length >= 2, (ACC.gaps || []).length + ' gaps');
+
 // =========================================================== 11. performance
 console.log('\n11. cost of the extra dimension');
 const whole = [['hrp',hrp],['gr11',gr11],['gr10',gr10]];

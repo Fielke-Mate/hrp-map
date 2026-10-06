@@ -103,6 +103,22 @@ button:disabled{opacity:.4;cursor:default}
 .share-b{background:#15283a;border:1px solid #2a4060;color:#9ab8d0;border-radius:5px;font:inherit;
   font-size:11px;padding:3px 9px;cursor:pointer;margin-top:6px}
 .share-b:hover{border-color:#4a9fd0;color:#dff0ff}
+.acc-ic{width:24px;height:24px;border-radius:50%;background:#f4f8fc;border:2px solid #1e4a6b;
+  display:flex;align-items:center;justify-content:center;font-size:13px;box-shadow:0 1px 5px #000a}
+.acc-ic.direct{border-color:#2e9bff;box-shadow:0 0 0 2px #2e9bff55,0 1px 5px #000a}
+.acc h4{margin-bottom:2px}
+.acc .rt-km{color:#9ab8d0;font-size:11px}
+.acc .use{margin:4px 0 2px}
+.acc .use button{font:inherit;font-size:10.5px;padding:2px 7px;margin:2px 4px 2px 0;border-radius:4px;
+  background:#1e4a6b;border:1px solid #3a7ca8;color:#dff0ff;cursor:pointer}
+.acc .appr{color:#8aa4bc;font-size:10.5px;font-style:italic}
+.acc ol{margin:5px 0 0 16px;padding:0}
+.acc li{margin:0 0 6px;font-size:11px;line-height:1.45}
+.acc .leg{display:block}
+.acc .fq{color:#9ab8d0}
+.acc .cur{color:#ffcf90}
+.acc .fine{color:#6a8398;font-size:10px;line-height:1.4;margin-top:4px}
+.acc .fine a{color:#7ad0f0}
 .lnk{margin:5px 0 0;font-size:11px;line-height:1.7}
 .lnk a{color:#7ad0f0;text-decoration:none;white-space:nowrap;margin-right:9px}
 .lnk a:hover{text-decoration:underline}
@@ -263,13 +279,16 @@ L.tileLayer('https://{s}.tile.opentopomap.org/{z}/{x}/{y}.png', {
 const R = {};                          // loaded routes by id
 let SHELTERS = null;
 let SHELTER_SOURCE = null;             // when the hut data was fetched and reviewed
+let ACCESS = null;                     // places to start, reached from Paris
+let accessOn = false;
 let active = 'hrp';                    // the route being planned
 let pick = {start:null, end:null};     // {route, km}
 let PLAN = null;
 let LOCKS = [];
 let hashLive = false;                  // off until a shared link has been applied                        // {route, id, km, label, type, night|null}
 const lines = {};
-const layers = {shelters:L.layerGroup().addTo(map), stops:L.layerGroup().addTo(map),
+const layers = {access:L.layerGroup().addTo(map),
+                shelters:L.layerGroup().addTo(map), stops:L.layerGroup().addTo(map),
                 pins:L.layerGroup().addTo(map)};
 
 function kmBetween(a, b){
@@ -591,6 +610,108 @@ function sharePlan(){
   else done(false);
 }
 
+
+// --- access from Paris -------------------------------------------------------
+// Places to start walking that can be reached from Paris: a direct train to
+// the trail, or a direct train to a gateway and then a regional train or a
+// bus. Built by src/data/build_access.py from the official SNCF, liO and
+// Pyrenees-Atlantiques timetables; a private shuttle that is in no open
+// timetable is marked as curated. Times are deliberately not shown - they
+// change, and a wrong time is worse than "check with the operator".
+const ROUTE_NAME = id => (ROUTE_META[id] || {}).name || id.toUpperCase();
+
+// "GAVARNIE-GÈDRE - Office de Tourisme" -> "Gavarnie-Gèdre · Office de Tourisme"
+function niceStop(n){
+  const parts = String(n || '').split(' - ');
+  const small = new Set(['les','de','du','des','la','le','sur','en','d','l','et']);
+  const town = parts[0] === parts[0].toUpperCase()
+    ? parts[0].toLowerCase().split('-').map((w, i) => (i && small.has(w)) ? w
+        : w.charAt(0).toUpperCase() + w.slice(1)).join('-')
+    : parts[0];
+  return [town].concat(parts.slice(1)).join(' · ');
+}
+
+function freqText(w){
+  if (!w) return '';
+  const word = r => r >= 0.9 ? 'daily' : r >= 0.55 ? 'most days' : r >= 0.2 ? 'some days' : 'a few days';
+  if (w.summerDays != null)
+    return word(w.summerDays / w.summerCovered) + ' in summer ' + w.summerYear
+      + ' (' + w.summerDays + ' of ' + w.summerCovered + ' days'
+      + (w.summerCovered < 80 ? ' the timetable covers' : '') + ')';
+  return word(w.share) + ' (' + w.days + ' days in the timetable to ' + w.windowTo + ')';
+}
+
+function legHtml(l, first){
+  if (first){
+    const svc = l.services.map(s => esc(s.service) + ' <span class="fq">' + freqText(s.when) + '</span>');
+    const from = [].concat(...l.services.map(s => s.parisStations));
+    return '<span class="leg"><b>Train from ' + esc([...new Set(from)].join(' / ')) + '</b> to <b>'
+      + esc(l.to) + '</b>: ' + svc.join('; ') + '</span>';
+  }
+  if (l.source === 'curated')
+    return '<span class="leg cur">then the <b>' + esc(l.line) + '</b> (' + esc(l.operator) + ') to <b>'
+      + esc(l.to) + '</b> - ' + esc(l.season) + '. <i>Not in any open timetable.</i>'
+      + (l.fallback ? ' ' + esc(l.fallback) : '') + '</span>';
+  const op = l.url ? '<a href="' + esc(l.url) + '" target="_blank" rel="noopener">' + esc(l.operator) + '</a>'
+                   : esc(l.operator);
+  return '<span class="leg">then ' + (l.mode === 'bus' ? 'bus' : 'train') + ' <b>' + esc(l.line)
+    + '</b> (' + op + ') to <b>' + esc(niceStop(l.to)) + '</b> <span class="fq">' + freqText(l.when) + '</span></span>';
+}
+
+function accessPopup(h){
+  const where = h.routes.map(r => ROUTE_NAME(r.route) + ' km ' + r.km.toFixed(1) + ' · '
+    + (r.offM < 1000 ? r.offM + ' m' : (r.offM / 1000).toFixed(1) + ' km') + ' from the trail').join('<br>');
+  const use = h.routes.map(r => '<button onclick="useTrailhead(\'' + r.route + '\',' + r.km + ',\'start\')">Start '
+      + ROUTE_NAME(r.route) + ' here</button><button onclick="useTrailhead(\'' + r.route + '\',' + r.km
+      + ',\'end\')">Finish here</button>').join('<br>');
+  const appr = (h.approach || []).map(a => ROUTE_NAME(a.route) + ' is ' + a.crowKm.toFixed(1)
+      + ' km away as the crow flies - the approach is not mapped here').join('<br>');
+  const opts = h.options.map(o => '<li>' + o.legs.map((l, i) => legHtml(l, i === 0)).join('') + '</li>').join('');
+  const src = (ACCESS.sources || []).map(s => esc(s.name) + ' to ' + esc(s.to)).join('; ');
+  return '<div class="acc"><h4>' + esc(niceStop(h.name)) + '</h4><div class="rt-km">' + where + '</div>'
+    + '<div class="use">' + use + '</div>' + (appr ? '<div class="appr">' + appr + '</div>' : '')
+    + '<ol>' + opts + '</ol>'
+    + '<div class="fine">From the official timetables (' + src + '). Times change: check with the '
+    + 'operator before you travel. <a href="https://www.sncf-connect.com/" target="_blank" rel="noopener">SNCF Connect</a></div></div>';
+}
+
+function drawAccess(){
+  layers.access.clearLayers();
+  if (!accessOn || !ACCESS) return;
+  const shown = id => ROUTE_META[id] && ROUTE_META[id].on;
+  ACCESS.trailheads.forEach(h => {
+    if (!h.routes.some(r => shown(r.route))) return;
+    const direct = h.options.some(o => o.direct);
+    const last = h.options[0].legs[h.options[0].legs.length - 1];
+    const glyph = direct || last.mode === 'train' ? '&#128646;' : '&#128652;';
+    L.marker(h.ll, {icon: L.divIcon({className:'', iconSize:[24,24], iconAnchor:[12,12],
+        html:'<div class="acc-ic' + (direct ? ' direct' : '') + '">' + glyph + '</div>'}),
+        zIndexOffset:500, title: niceStop(h.name)})
+     .bindPopup(accessPopup(h), {maxWidth:330})
+     .addTo(layers.access);
+  });
+}
+
+// Drop a start or finish pin where this trailhead meets the trail.
+function useTrailhead(route, km, which){
+  if (!R[route] || !ROUTE_META[route].on){
+    // Show the route first. A plain function rather than async, so the
+    // build's handler lint recognises it as the target of the popup buttons.
+    ROUTE_META[route].on = true;
+    return ensureRoute(route).then(() => useTrailhead(route, km, which));
+  }
+  if (active !== route){ active = route; pick = {start:null, end:null}; PLAN = null; }
+  pick[which] = {route: route, km: km};
+  if (pick.start && pick.end && pick.end.km < pick.start.km){
+    const t = pick.start; pick.start = pick.end; pick.end = t;   // the planner walks west to east
+  }
+  map.closePopup();
+  syncInputs();
+  if (pick.start && pick.end) replan();
+  else { drawRoutes(); drawPins(); updateToggles(); drawShelters(); render(); }
+  drawAccess();
+}
+
 // --- locked stops ---------------------------------------------------------
 // A lock survives every change to the daily range, the shelter types and the
 // section, because the whole point is "re-plan around this".
@@ -870,7 +991,11 @@ function drawPins(){
 function setPick(id, km){
   if (!R[id]) return;
   active = id;                                 // choosing a point plans on it
-  if (!pick.start || pick.start.route !== id || pick.end){
+  if (pick.end && !pick.start && pick.end.route === id){
+    // a finish was chosen first (from a trailhead): this click is the start
+    const a = Math.min(km, pick.end.km), b = Math.max(km, pick.end.km);
+    pick = {start:{route:id, km:a}, end:{route:id, km:b}};
+  } else if (!pick.start || pick.start.route !== id || pick.end){
     pick = {start:{route:id, km:km}, end:null};
     PLAN = null;
   } else {
@@ -933,7 +1058,9 @@ function syncInputs(){
   if (pick.start) document.getElementById('startKm').value = pick.start.km.toFixed(1);
   if (pick.end)   document.getElementById('endKm').value   = pick.end.km.toFixed(1);
   const st = document.getElementById('pickState');
-  if (!pick.start) st.innerHTML = 'Click near a route to set your <b>start</b>';
+  if (!pick.start && pick.end) st.innerHTML = 'Finish <b>' + ROUTE_META[pick.end.route].name
+    + ' km ' + pick.end.km.toFixed(1) + '</b> — now click your <b>start</b>';
+  else if (!pick.start) st.innerHTML = 'Click near a route to set your <b>start</b>';
   else if (!pick.end) st.innerHTML = 'Start <b>' + ROUTE_META[pick.start.route].name
     + ' km ' + pick.start.km.toFixed(1) + '</b> — now click your <b>finish</b>'
     + ' <span style="color:#6a8398">(or drag the green pin)</span>';
@@ -952,6 +1079,7 @@ function setActive(id){
 function updateToggles(){
   document.querySelectorAll('.rt').forEach(el => {
     const id = el.dataset.r;
+    if (!ROUTE_META[id]) return;          // the From-Paris toggle is not a route
     const on = !!ROUTE_META[id].on, isActive = id === active && on;
     el.classList.toggle('on', on);
     el.style.borderColor = isActive ? ROUTE_META[id].colour : '#2a4060';
@@ -1328,12 +1456,21 @@ async function ensureRoute(id){
           }
         }
       }
-      drawRoutes(); updateToggles(); drawShelters(); syncInputs(); drawPins(); render();
+      drawRoutes(); updateToggles(); drawShelters(); syncInputs(); drawPins(); render(); drawAccess();
     };
     b.oncontextmenu = e => { e.preventDefault(); if (ROUTE_META[id].on) setActive(id); };
     tg.appendChild(b);
   });
+  const ab = document.createElement('div');
+  ab.className = 'rt'; ab.id = 'accessToggle';
+  ab.title = 'Places to start walking that you can reach from Paris by train, or train and bus';
+  ab.innerHTML = '&#128646; From Paris';
+  ab.onclick = () => { accessOn = !accessOn; ab.classList.toggle('on', accessOn); drawAccess(); };
+  tg.appendChild(ab);
 
+  // places to start from Paris: optional - the planner works without them
+  fetch('./data/access.json').then(x => x.ok ? x.json() : null).then(d => { ACCESS = d; drawAccess(); })
+    .catch(() => {});
   const shelterDoc = await fetch('./data/shelters.json').then(x => x.json());
   SHELTERS = shelterDoc.shelters;
   SHELTER_SOURCE = shelterDoc.source || null;

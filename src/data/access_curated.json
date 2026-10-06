@@ -1,0 +1,15 @@
+{
+  "_about": "Onward links that exist but are in no open timetable - private shuttles, mostly. Each is chained after a timetabled bus whose stop lies within 400 m of 'from'. Kept separate from the official data so its provenance is never confused with it.",
+  "links": [
+    {
+      "from": {"name": "Cauterets - Gare routière", "ll": [42.891876, -0.114175]},
+      "to": {"name": "Pont d'Espagne", "ll": [42.851602, -0.136735]},
+      "mode": "shuttle",
+      "line": "Navette Cauterets - Pont d'Espagne",
+      "operator": "ACTL Evadour",
+      "season": "summer, plus winter ski season; road closes at times for snow or works",
+      "source": "Timetable provided for the 2026 HRP trip (reduced-summer table 31/08-26/09/26, ~20 min, EUR 5.50); stop positions from OpenStreetMap (bus_station 'Gare routière SNCF', bus_stop 'Pont d'Espagne'). Check the operator for the current timetable.",
+      "fallback": "If the navette is not running, the Chemin des Cascades walks in from La Raillère in about 1.5 h (summer)."
+    }
+  ]
+}

@@ -9,7 +9,7 @@
 // the tiles with `Cache-Control: max-age=604800` and `Access-Control-Allow-Origin: *`,
 // so responses are CORS-readable (not opaque) and carry no storage-quota padding.
 
-const VERSION = 'v3';
+const VERSION = 'v4';
 const SHELL = 'hrp-shell-' + VERSION;
 const TILES = 'hrp-tiles';           // intentionally unversioned
 const TILE_HOST = /(^|\.)tile\.opentopomap\.org$/;
@@ -32,7 +32,8 @@ const SHELL_URLS = [
   './data/shelters.json',
   './data/routes/hrp.json',
   './data/routes/gr10.json',
-  './data/routes/gr11.json'
+  './data/routes/gr11.json',
+  './data/access.json'
 ];
 
 // Refuge and hotel wifi commonly answers EVERY request with its login page
